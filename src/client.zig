@@ -67,6 +67,7 @@ pub const Client = struct {
         std.log.info("connected, auth key ready", .{});
         defer {
             c.close(io);
+            c.join(io);
             c.deinit();
             self.primary = null;
         }
