@@ -147,7 +147,10 @@ pub const Conn = struct {
     fn readLoop(self: *Conn, io: Io, handler: UpdateHandler) !void {
         defer self.drainPending(io);
         while (true) {
-            const frame = self.transport.readFrame(io, self.allocator) catch break;
+            const frame = self.transport.readFrame(io, self.allocator) catch |err| {
+                std.log.debug("readLoop: readFrame failed: {}", .{err});
+                break;
+            };
             defer self.allocator.free(frame);
             const payload = self.session.decrypt(frame, self.allocator) catch continue;
             defer self.allocator.free(payload);
@@ -174,6 +177,7 @@ pub const Conn = struct {
                     const new_salt = std.mem.readInt(i64, payload[20..28], .little);
                     self.session.server_salt = new_salt;
                     std.log.debug("bad_server_salt, updated salt, retrying {} pending", .{self.pending.count()});
+                    self.pong_event.set(io);
                     self.retryPending(io);
                 } else {
                     std.log.warn("bad_server_salt: payload too short, draining", .{});
