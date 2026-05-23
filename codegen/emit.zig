@@ -12,6 +12,7 @@ const Metadata = meta.Metadata;
 fn tlTypeToZig(
     tl_type: []const u8,
     union_types: *const std.StringHashMap(void),
+    single_types: *const std.StringHashMap([]const u8),
     arena: Allocator,
     qualify_unions: bool, // prefix with @import("tl_types").
     box: bool, // wrap union type in *
@@ -26,15 +27,15 @@ fn tlTypeToZig(
     if (std.mem.eql(u8, tl_type, "int256")) return "[32]u8";
 
     if (std.mem.indexOfScalar(u8, tl_type, '<')) |lt| {
-        const inner = try tlTypeToZig(tl_type[lt + 1 .. tl_type.len - 1], union_types, arena, qualify_unions, false);
+        const inner = try tlTypeToZig(tl_type[lt + 1 .. tl_type.len - 1], union_types, single_types, arena, qualify_unions, false);
         return std.fmt.allocPrint(arena, "[]{s}", .{inner});
     }
     if (std.mem.startsWith(u8, tl_type, "Vector ")) {
-        const inner = try tlTypeToZig(tl_type[7..], union_types, arena, qualify_unions, false);
+        const inner = try tlTypeToZig(tl_type[7..], union_types, single_types, arena, qualify_unions, false);
         return std.fmt.allocPrint(arena, "[]{s}", .{inner});
     }
     if (std.mem.startsWith(u8, tl_type, "%Vector ")) {
-        const inner = try tlTypeToZig(tl_type[8..], union_types, arena, qualify_unions, false);
+        const inner = try tlTypeToZig(tl_type[8..], union_types, single_types, arena, qualify_unions, false);
         return std.fmt.allocPrint(arena, "[]{s}", .{inner});
     }
 
@@ -47,12 +48,21 @@ fn tlTypeToZig(
         return std.fmt.allocPrint(arena, "{s}{s}", .{ ptr, zname });
     }
 
+    if (single_types.get(tl_type)) |ctor_name| {
+        var nb: [256]u8 = undefined;
+        const zname = names.typeName(ctor_name, &nb);
+        if (qualify_unions)
+            return std.fmt.allocPrint(arena, "@import(\"types\").{s}", .{zname});
+        return std.fmt.allocPrint(arena, "{s}", .{zname});
+    }
+
     return "[]const u8";
 }
 
 pub fn emitTypes(
     schema: *const parse.Schema,
     union_types: *const std.StringHashMap(void),
+    single_types: *const std.StringHashMap([]const u8),
     metadata: *const Metadata,
     out_dir: []const u8,
     io: Io,
@@ -116,7 +126,7 @@ pub fn emitTypes(
                 try buf.print(allocator, "    {s}: {s},\n", .{ p.name, ft });
             } else if (p.flag_bit) |bit| {
                 const fname = names.fieldName(p.name, &field_buf);
-                const ftype = try tlTypeToZig(p.type_name, union_types, tmp, false, is_rec);
+                const ftype = try tlTypeToZig(p.type_name, union_types, single_types, tmp, false, is_rec);
                 if (p.flags_index == 0) {
                     try buf.print(allocator, "    {s}: tl.Flag({d}, {s}) = .none,\n", .{ fname, bit, ftype });
                 } else {
@@ -124,7 +134,7 @@ pub fn emitTypes(
                 }
             } else {
                 const fname = names.fieldName(p.name, &field_buf);
-                const ftype = try tlTypeToZig(p.type_name, union_types, tmp, false, is_rec);
+                const ftype = try tlTypeToZig(p.type_name, union_types, single_types, tmp, false, is_rec);
                 try buf.print(allocator, "    {s}: {s},\n", .{ fname, ftype });
             }
         }
@@ -181,6 +191,7 @@ pub fn emitTypes(
 pub fn emitFunctions(
     schema: *const parse.Schema,
     union_types: *const std.StringHashMap(void),
+    single_types: *const std.StringHashMap([]const u8),
     out_dir: []const u8,
     io: Io,
     allocator: Allocator,
@@ -238,18 +249,18 @@ pub fn emitFunctions(
                 if (p.is_flags) {
                     try buf.print(allocator, "{s}    {s}: tl.Flags,\n", .{ indent, p.name });
                 } else if (p.flag_bit) |bit| {
-                    const ftype = try tlTypeToZig(p.type_name, union_types, tmp, true, false);
+                    const ftype = try tlTypeToZig(p.type_name, union_types, single_types, tmp, true, false);
                     const fname = names.fieldName(p.name, &field_buf);
                     try buf.print(allocator, "{s}    {s}: tl.Flag({d}, {s}) = .none,\n", .{ indent, fname, bit, ftype });
                 } else {
                     const fname = names.fieldName(p.name, &field_buf);
-                    const ftype = try tlTypeToZig(p.type_name, union_types, tmp, true, false);
+                    const ftype = try tlTypeToZig(p.type_name, union_types, single_types, tmp, true, false);
                     try buf.print(allocator, "{s}    {s}: {s},\n", .{ indent, fname, ftype });
                 }
             }
 
             if (std.mem.indexOfScalar(u8, ctor.result_type, '<') != null) {
-                const resp_type = try tlTypeToZig(ctor.result_type, union_types, tmp, true, false);
+                const resp_type = try tlTypeToZig(ctor.result_type, union_types, single_types, tmp, true, false);
                 try buf.print(allocator, "{s}    pub const Response = {s};\n", .{ indent, resp_type });
             } else {
                 const resp = names.typeName(ctor.result_type, &resp_buf);
