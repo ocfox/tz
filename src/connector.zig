@@ -35,7 +35,7 @@ pub const ConnectOptions = struct {
     api_hash: []const u8,
 };
 
-/// Vtable-based update callback. Passed in from Client; points to the internal dispatcher.
+/// Vtable-based update callback. Passed in from Client.
 pub const UpdateHandler = struct {
     ptr: *anyopaque,
     vtable: *const VTable,

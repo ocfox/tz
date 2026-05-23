@@ -77,6 +77,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         bot_id: ?i64 = null,
 
         pub fn init(allocator: Allocator, opts: ClientOptions) !*Self {
+            initRandomCounter();
             const c = try allocator.create(Self);
             c.* = .{ .allocator = allocator, .opts = opts };
             return c;
@@ -306,6 +307,13 @@ var random_counter = std.atomic.Value(i64).init(0);
 
 fn nextRandomId() i64 {
     return random_counter.fetchAdd(1, .monotonic);
+}
+
+fn initRandomCounter() void {
+    var seed: [32]u8 = undefined;
+    _ = std.os.linux.getrandom(&seed, seed.len, 0);
+    var csprng = std.Random.DefaultCsprng.init(seed);
+    random_counter.store(csprng.random().int(i64), .monotonic);
 }
 
 const layer: i32 = 225;
