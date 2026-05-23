@@ -1,8 +1,8 @@
 # tz
 
-**WIP — rough edges, missing features, API may change.**
+Work in progress — rough edges, missing features, API may change.
 
-Telegram MTProto API client in Zig, Requires Zig 0.16.
+Telegram MTProto API client in Zig, requires Zig 0.16.
 
 Echo bot binary: ~518 KB (`ReleaseSmall`, statically linked).
 
@@ -12,7 +12,7 @@ Echo bot binary: ~518 KB (`ReleaseSmall`, statically linked).
 - Encrypted session with server salt auto-renewal
 - TCP and WebSocket transports
 - TL schema codegen — types and functions generated from `schema/*.tl` at build time
-- Typed update dispatcher — register handlers per update type, zero serialization overhead
+- Comptime handler dispatch — register handlers per update type, zero runtime overhead
 - `FileStorage` / `MemoryStorage` for session persistence
 - Bot token auth
 
@@ -23,16 +23,18 @@ const std = @import("std");
 const tz = @import("tz");
 const tg = tz.types;
 
-fn onMessage(client: *tz.Client, io: std.Io, entities: tz.Entities, update: tg.UpdateNewMessage) !void {
+fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
     const msg = switch (update.message) {
         .Message => |m| m,
         else => return,
     };
-    if (msg.out.value != null) return;
-
-    const sender = tz.message.Sender.init(client);
-    if (sender.reply(entities, update)) |req| try req.text(io, msg.message);
+    if (msg.message.len == 0) return;
+    try ctx.reply(update, msg.message);
 }
+
+const handlers = &.{
+    tz.handler(tg.UpdateNewMessage, onMessage),
+};
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -43,22 +45,16 @@ pub fn main() !void {
     defer threaded.deinit();
     const io = threaded.io();
 
-    var dispatcher = tz.Dispatcher.init(allocator);
-    defer dispatcher.deinit();
-    try dispatcher.on(tg.UpdateNewMessage, onMessage);
-
     var storage = tz.FileStorage.init("bot.session");
 
-    const client = try tz.Client.init(allocator, .{
+    const client = try tz.Client(handlers).init(allocator, .{
         .api_id    = api_id,     // https://core.telegram.org/api/obtaining_api_id
         .api_hash  = api_hash,
         .bot_token = bot_token,
         .storage   = storage.storage(),
-        .handler   = dispatcher.handler(),
     });
     defer client.deinit();
 
-    dispatcher.bindClient(client);
     try client.run(io);
 }
 ```
