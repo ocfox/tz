@@ -110,7 +110,6 @@ pub const Conn = struct {
             self.pending_mutex.lockUncancelable(io);
             _ = self.pending.remove(enc.msg_id);
             self.pending_mutex.unlock(io);
-            self.allocator.free(pr.plaintext);
             return err;
         };
         self.allocator.free(pr.plaintext);
@@ -126,10 +125,9 @@ pub const Conn = struct {
 
     pub fn join(self: *Conn, io: Io) void {
         const s = &(self.select orelse return);
-        // Wait for the first loop to finish (any reason: error, ping timeout, close).
-        // Then cancel the remaining two -- all from this single thread.
         _ = s.await() catch {};
         s.cancelDiscard();
+        self.select = null;
         self.update_group.cancel(io);
     }
 
@@ -302,13 +300,12 @@ pub const Conn = struct {
                 self.allocator,
             ) catch break;
             defer self.allocator.free(bytes);
+            self.pong_event.reset();
             const enc = self.session.encrypt(bytes, self.allocator, io) catch break;
             self.write_queue.putOne(io, enc.data) catch {
                 self.allocator.free(enc.data);
                 break;
             };
-
-            self.pong_event.reset();
             self.pong_event.waitTimeout(io, .{ .duration = .{
                 .raw = std.Io.Duration.fromSeconds(15),
                 .clock = .awake,
