@@ -5,15 +5,18 @@ const tcp = @import("transport/tcp.zig");
 const session_mod = @import("session/message.zig");
 const storage_mod = @import("session/storage.zig");
 const auth_key_mod = @import("session/auth_key.zig");
+const tl_types = @import("tl_types");
+const codec = @import("tl_codec");
 
-// MTProto system message type IDs (parsed manually, not in generated types)
-const cid_msg_container: u32 = 0x73f1f8dc;
-const cid_rpc_result: u32 = 0xf35c6d01;
-const cid_msgs_ack: u32 = 0x62d6b459;
-const cid_new_session_created: u32 = 0x9ec20908;
-const cid_bad_server_salt: u32 = 0xedab447b;
-const cid_bad_msg_notification: u32 = 0xa7eff811;
-const cid_rpc_error: u32 = 0x2144ca19;
+// MTProto system message type IDs
+const cid_msg_container: u32 = 0x73f1f8dc; // not in schema
+const cid_rpc_result: u32 = 0xf35c6d01;    // not in schema
+const cid_msgs_ack: u32 = tl_types.MsgsAck.tl_id;
+const cid_new_session_created: u32 = tl_types.NewSessionCreated.tl_id;
+const cid_bad_server_salt: u32 = tl_types.BadServerSalt.tl_id;
+const cid_bad_msg_notification: u32 = tl_types.BadMsgNotification_.tl_id;
+const cid_rpc_error: u32 = tl_types.RpcError.tl_id;
+const cid_pong: u32 = tl_types.Pong.tl_id;
 
 pub const DC = struct {
     id: u8,
@@ -76,6 +79,8 @@ pub const Conn = struct {
     group: std.Io.Group = .init,
     closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     initialized: bool = false,
+    pong_queue: std.Io.Queue(i64),
+    pong_queue_buf: [1]i64,
 
     pub fn call(self: *Conn, io: Io, request: []const u8) ![]u8 {
         var pr = PendingRequest{};
@@ -115,6 +120,7 @@ pub const Conn = struct {
     pub fn run(self: *Conn, io: Io, handler: UpdateHandler) !void {
         try self.group.concurrent(io, readLoop, .{ self, io, handler });
         try self.group.concurrent(io, writeLoop, .{ self, io });
+        try self.group.concurrent(io, pingLoop, .{ self, io });
     }
 
     pub fn join(self: *Conn, io: Io) void {
@@ -131,6 +137,7 @@ pub const Conn = struct {
     pub fn close(self: *Conn, io: Io) void {
         if (self.closed.swap(true, .acq_rel)) return;
         self.write_queue.close(io);
+        self.pong_queue.close(io);
         self.transport.stream.close(io); // unblocks readFrame's blocking TCP read
     }
 
@@ -174,6 +181,11 @@ pub const Conn = struct {
             cid_bad_msg_notification => {
                 std.log.warn("bad_msg_notification", .{});
                 self.drainPending(io);
+            },
+            cid_pong => {
+                var r: std.Io.Reader = .fixed(payload[4..]);
+                const pong = codec.decode(tl_types.Pong, &r, self.allocator) catch return;
+                self.pong_queue.putOne(io, pong.ping_id) catch {};
             },
             else => {
             const owned = try self.allocator.dupe(u8, payload);
@@ -272,6 +284,53 @@ pub const Conn = struct {
             self.transport.writeFrame(io, data) catch break;
         }
     }
+
+    fn pingLoop(self: *Conn, io: Io) std.Io.Cancelable!void {
+        const funcs = @import("tl_functions");
+
+        const PingSelect = std.Io.Select(union(enum) {
+            pong: (std.Io.QueueClosedError || std.Io.Cancelable)!i64,
+            timeout: std.Io.Cancelable!void,
+        });
+
+        while (!self.closed.load(.acquire)) {
+            std.Io.sleep(io, std.Io.Duration.fromSeconds(60), .awake) catch break;
+            if (self.closed.load(.acquire)) break;
+
+            // Random ping_id (same approach as gotd)
+            var ping_id_bytes: [8]u8 = undefined;
+            io.random(&ping_id_bytes);
+            const ping_id = std.mem.readInt(i64, &ping_id_bytes, .little);
+
+            // Encode and send ping_delay_disconnect
+            const bytes = codec.encodeAlloc(
+                funcs.PingDelayDisconnect{ .ping_id = ping_id, .disconnect_delay = 75 },
+                self.allocator,
+            ) catch break;
+            defer self.allocator.free(bytes);
+            const enc = self.session.encrypt(bytes, self.allocator, io) catch break;
+            self.write_queue.putOne(io, enc.data) catch {
+                self.allocator.free(enc.data);
+                break;
+            };
+
+            // Wait for pong with 15s timeout (gotd: pingTimeout = 15s)
+            var sel_buf: [2]PingSelect.Union = undefined;
+            var sel = PingSelect.init(io, &sel_buf);
+            sel.concurrent(.pong, std.Io.Queue(i64).getOne, .{ &self.pong_queue, io }) catch break;
+            sel.async(.timeout, std.Io.sleep, .{ io, std.Io.Duration.fromSeconds(15), .awake });
+            const result = sel.await() catch break;
+            sel.cancelDiscard();
+            switch (result) {
+                .pong => {}, // received pong, continue
+                .timeout => {
+                    std.log.warn("ping timeout, closing connection", .{});
+                    self.close(io);
+                    break;
+                },
+            }
+        }
+    }
 };
 
 pub fn connect(io: Io, allocator: Allocator, options: ConnectOptions) !*Conn {
@@ -323,7 +382,10 @@ pub fn connect(io: Io, allocator: Allocator, options: ConnectOptions) !*Conn {
         .write_queue_buf = undefined,
         .write_queue = undefined,
         .pending = std.AutoHashMap(i64, *PendingRequest).init(allocator),
+        .pong_queue_buf = undefined,
+        .pong_queue = undefined,
     };
     conn.write_queue = std.Io.Queue([]const u8).init(&conn.write_queue_buf);
+    conn.pong_queue = std.Io.Queue(i64).init(&conn.pong_queue_buf);
     return conn;
 }
