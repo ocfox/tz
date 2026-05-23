@@ -71,10 +71,10 @@ pub const Conn = struct {
     pending: std.AutoHashMap(i64, *PendingRequest),
     pending_mutex: std.Io.Mutex = .init,
     group: std.Io.Group = .init,
+    ping_group: std.Io.Group = .init,
     closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     initialized: bool = false,
-    pong_queue: std.Io.Queue(i64),
-    pong_queue_buf: [1]i64,
+    pong_event: std.Io.Event = .unset,
 
     pub fn call(self: *Conn, io: Io, request: []const u8) ![]u8 {
         var pr = PendingRequest{};
@@ -114,11 +114,14 @@ pub const Conn = struct {
     pub fn run(self: *Conn, io: Io, handler: UpdateHandler) !void {
         try self.group.concurrent(io, readLoop, .{ self, io, handler });
         try self.group.concurrent(io, writeLoop, .{ self, io });
-        try self.group.concurrent(io, pingLoop, .{ self, io });
+        // pingLoop runs in a separate group so it can call close() -> group.cancel()
+        // without deadlocking on its own group.
+        try self.ping_group.concurrent(io, pingLoop, .{ self, io });
     }
 
     pub fn join(self: *Conn, io: Io) void {
         self.group.await(io) catch {};
+        self.ping_group.await(io) catch {};
     }
 
     pub fn deinit(self: *Conn) void {
@@ -128,16 +131,15 @@ pub const Conn = struct {
     }
 
     // Signals the loops to stop. Safe to call multiple times.
+    // May be called from pingLoop (which is in ping_group, not group).
     pub fn close(self: *Conn, io: Io) void {
         if (self.closed.swap(true, .acq_rel)) return;
         self.write_queue.close(io);
-        self.pong_queue.close(io);
-        self.transport.stream.close(io); // unblocks readFrame's blocking TCP read
+        self.group.cancel(io); // cancels readLoop + writeLoop; safe since pingLoop is not in this group
     }
 
     fn readLoop(self: *Conn, io: Io, handler: UpdateHandler) !void {
         defer self.drainPending(io);
-        defer self.close(io);
         while (!self.closed.load(.acquire)) {
             const frame = self.transport.readFrame(io, self.allocator) catch break;
             defer self.allocator.free(frame);
@@ -177,9 +179,7 @@ pub const Conn = struct {
                 self.drainPending(io);
             },
             types.Pong.cid => {
-                var r: std.Io.Reader = .fixed(payload[4..]);
-                const pong = codec.decode(types.Pong, &r, self.allocator) catch return;
-                self.pong_queue.putOne(io, pong.ping_id) catch {};
+                self.pong_event.set(io);
             },
             else => {
             const owned = try self.allocator.dupe(u8, payload);
@@ -282,11 +282,6 @@ pub const Conn = struct {
     fn pingLoop(self: *Conn, io: Io) std.Io.Cancelable!void {
         const funcs = @import("functions");
 
-        const PingSelect = std.Io.Select(union(enum) {
-            pong: (std.Io.QueueClosedError || std.Io.Cancelable)!i64,
-            timeout: std.Io.Cancelable!void,
-        });
-
         while (!self.closed.load(.acquire)) {
             std.Io.sleep(io, std.Io.Duration.fromSeconds(60), .awake) catch break;
             if (self.closed.load(.acquire)) break;
@@ -308,21 +303,16 @@ pub const Conn = struct {
                 break;
             };
 
-            // Wait for pong with 15s timeout (gotd: pingTimeout = 15s)
-            var sel_buf: [2]PingSelect.Union = undefined;
-            var sel = PingSelect.init(io, &sel_buf);
-            sel.concurrent(.pong, std.Io.Queue(i64).getOne, .{ &self.pong_queue, io }) catch break;
-            sel.async(.timeout, std.Io.sleep, .{ io, std.Io.Duration.fromSeconds(15), .awake });
-            const result = sel.await() catch break;
-            sel.cancelDiscard();
-            switch (result) {
-                .pong => {}, // received pong, continue
-                .timeout => {
-                    std.log.warn("ping timeout, closing connection", .{});
-                    self.close(io);
-                    break;
-                },
-            }
+            // Wait for pong with 15s timeout
+            self.pong_event.reset();
+            self.pong_event.waitTimeout(io, .{ .duration = .{
+                .raw = std.Io.Duration.fromSeconds(15),
+                .clock = .awake,
+            } }) catch {
+                std.log.warn("ping timeout, closing connection", .{});
+                self.close(io);
+                break;
+            };
         }
     }
 };
@@ -376,10 +366,7 @@ pub fn connect(io: Io, allocator: Allocator, options: ConnectOptions) !*Conn {
         .write_queue_buf = undefined,
         .write_queue = undefined,
         .pending = std.AutoHashMap(i64, *PendingRequest).init(allocator),
-        .pong_queue_buf = undefined,
-        .pong_queue = undefined,
     };
     conn.write_queue = std.Io.Queue([]const u8).init(&conn.write_queue_buf);
-    conn.pong_queue = std.Io.Queue(i64).init(&conn.pong_queue_buf);
     return conn;
 }
