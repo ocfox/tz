@@ -62,6 +62,7 @@ pub const FileStorage = struct {
             else => return err,
         };
         defer file.close(io);
+        // SAFETY: immediately overwritten by readPositionalAll below
         var data: SessionData = undefined;
         const n = try file.readPositionalAll(io, std.mem.asBytes(&data), 0);
         if (n != @sizeOf(SessionData)) return null;

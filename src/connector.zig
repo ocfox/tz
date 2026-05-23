@@ -6,7 +6,6 @@ const session_mod = @import("session/message.zig");
 const storage_mod = @import("session/storage.zig");
 const auth_key_mod = @import("session/auth_key.zig");
 const mtproto_mod = @import("mtproto.zig");
-const codec = @import("codec");
 
 pub const DC = struct {
     id: u8,
@@ -121,8 +120,10 @@ pub const Connector = struct {
         const self = try allocator.create(Connector);
         self.* = .{
             .allocator = allocator,
+            // SAFETY: mtp is initialized by Connector.connect before any use
             .mtp = undefined,
             .mtp_handler = .{ .connector = self },
+            // SAFETY: update_handler is set by Connector.run before any update is dispatched
             .update_handler = undefined,
             .api_id = opts.api_id,
             .api_hash = opts.api_hash,

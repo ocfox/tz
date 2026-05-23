@@ -12,8 +12,8 @@ const cid_rpc_result: u32 = 0xf35c6d01;
 const cid_gzip_packed: u32 = 0x3072cfa1;
 
 const PendingRequest = struct {
-    buf: [1][]u8 = undefined,
-    queue: std.Io.Queue([]u8) = undefined,
+    buf: [1][]u8,
+    queue: std.Io.Queue([]u8),
     plaintext: []const u8 = &.{},
 
     fn init(self: *PendingRequest) void {
@@ -41,7 +41,7 @@ pub fn MtProto(comptime Handler: type) type {
         pending: std.AutoHashMap(i64, *PendingRequest),
         pending_mutex: std.Io.Mutex = .init,
         pong_event: std.Io.Event = .unset,
-        select_buf: [3]LoopResult = undefined,
+        select_buf: [3]LoopResult,
         select: ?std.Io.Select(LoopResult) = null,
         handler: *Handler,
 
@@ -52,12 +52,15 @@ pub fn MtProto(comptime Handler: type) type {
             handler: *Handler,
         ) !*Self {
             const self = try allocator.create(Self);
+            // SAFETY: write_queue_buf/write_queue are initialized by the Queue.init call below;
+            //         select_buf is initialized by Select.init inside run() before any use.
             self.* = .{
                 .allocator = allocator,
                 .session = session,
                 .transport = transport,
                 .write_queue_buf = undefined,
                 .write_queue = undefined,
+                .select_buf = undefined,
                 .pending = std.AutoHashMap(i64, *PendingRequest).init(allocator),
                 .handler = handler,
             };
@@ -88,14 +91,15 @@ pub fn MtProto(comptime Handler: type) type {
         /// Block until all loops exit. Safe to call multiple times.
         pub fn join(self: *Self) void {
             const s = &(self.select orelse return);
-            _ = s.await() catch {};
+            _ = s.await() catch |err| std.log.debug("select await: {}", .{err});
             s.cancelDiscard();
             self.select = null;
         }
 
         /// Send a serialized TL request, return the raw response bytes (caller frees).
         pub fn call(self: *Self, io: Io, request: []const u8) ![]u8 {
-            var pr = PendingRequest{};
+            // SAFETY: pr.init() initializes buf and queue immediately below
+            var pr: PendingRequest = undefined;
             pr.init();
             pr.plaintext = try self.allocator.dupe(u8, request);
             errdefer self.allocator.free(pr.plaintext);
@@ -138,7 +142,7 @@ pub fn MtProto(comptime Handler: type) type {
                 defer self.allocator.free(frame);
                 const payload = self.session.decrypt(frame, self.allocator) catch continue;
                 defer self.allocator.free(payload);
-                self.dispatch(io, payload) catch {};
+                self.dispatch(io, payload) catch |err| std.log.debug("dispatch: {}", .{err});
             }
         }
 
@@ -200,7 +204,7 @@ pub fn MtProto(comptime Handler: type) type {
                 const bytes = std.mem.readInt(u32, payload[pos + 12 ..][0..4], .little);
                 const body_end = pos + 16 + bytes;
                 if (body_end > payload.len) break;
-                self.dispatch(io, payload[pos + 16 .. body_end]) catch {};
+                self.dispatch(io, payload[pos + 16 .. body_end]) catch |err| std.log.debug("dispatch: {}", .{err});
                 pos = body_end;
             }
         }

@@ -256,9 +256,11 @@ pub fn perform(transport: *tcp.TcpTransport, io: Io, allocator: Allocator) !Auth
     if (gen_id != 0x3bcbf734) return error.DhGenFailed;
 
     const auth_key_hash = sha.sha1(&dh_result.secret);
+    // SAFETY: immediately overwritten by memcpy from auth_key_hash slice
     var auth_key_id: i64 = undefined;
     @memcpy(std.mem.asBytes(&auth_key_id), auth_key_hash[12..20]);
 
+    // SAFETY: every byte is written by the XOR loop below
     var server_salt: i64 = undefined;
     for (std.mem.asBytes(&server_salt), new_nonce[0..8], server_nonce[0..8]) |*o, a, b| o.* = a ^ b;
 

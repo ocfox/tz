@@ -50,6 +50,6 @@ pub fn main() !void {
 }
 
 fn usage() noreturn {
-    std.debug.print("usage: TZ_API_ID=<id> TZ_API_HASH=<hash> TZ_BOT_TOKEN=<token> ./echo_bot\n", .{});
+    std.log.err("usage: TZ_API_ID=<id> TZ_API_HASH=<hash> TZ_BOT_TOKEN=<token> ./echo_bot", .{});
     std.process.exit(1);
 }

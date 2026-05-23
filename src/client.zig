@@ -96,7 +96,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 self.runOnce(io) catch |err| {
                     if (self.closed) return;
                     std.log.warn("disconnected: {}, reconnecting in {}ms", .{ err, backoff_ms });
-                    std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(backoff_ms)), .awake) catch {};
+                    std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(backoff_ms)), .awake) catch |e| std.log.debug("sleep: {}", .{e});
                     backoff_ms = @min(backoff_ms * 5, 10_000);
                     continue;
                 };
@@ -269,7 +269,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 if (std.mem.indexOf(u8, msg, "FLOOD_WAIT_")) |idx| {
                     const secs = std.fmt.parseInt(u64, msg[idx + "FLOOD_WAIT_".len ..], 10) catch 60;
                     std.log.warn("flood wait: sleeping {}s", .{secs});
-                    std.Io.sleep(io, std.Io.Duration.fromSeconds(@intCast(secs)), .awake) catch {};
+                    std.Io.sleep(io, std.Io.Duration.fromSeconds(@intCast(secs)), .awake) catch |err| std.log.debug("sleep: {}", .{err});
                 }
             }
             if (code == 303) {

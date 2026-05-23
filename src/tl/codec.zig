@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ser = @import("serialize.zig");
 const de = @import("deserialize.zig");
 
 pub const serialize = @import("serialize.zig");
@@ -320,6 +319,7 @@ pub fn decode(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerro
         },
         .array => |arr| blk: {
             if (arr.child != u8) @compileError("only [N]u8 arrays supported");
+            // SAFETY: immediately overwritten by readSliceAll
             var buf: T = undefined;
             try r.readSliceAll(&buf);
             break :blk buf;
@@ -376,6 +376,7 @@ fn decodeStruct(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyer
 }
 
 pub fn decodeStructBody(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerror!T {
+    // SAFETY: every field is written by the inline for loop below before result is returned
     var result: T = undefined;
     var flags_val: u32 = 0;  // flags word 0
     var flags2_val: u32 = 0; // flags word 1

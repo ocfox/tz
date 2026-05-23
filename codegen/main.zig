@@ -1,5 +1,4 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const parse = @import("parse.zig");
 const meta = @import("metadata.zig");
 const emit = @import("emit.zig");

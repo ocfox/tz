@@ -71,7 +71,7 @@ pub fn setFromBigEndianBytes(m: *Managed, bytes: []const u8, allocator: Allocato
     std.debug.assert(bytes.len <= 256);
     var hex: [512]u8 = undefined;
     for (bytes, 0..) |b, i| {
-        _ = std.fmt.bufPrint(hex[i * 2 .. i * 2 + 2], "{x:0>2}", .{b}) catch unreachable;
+        _ = std.fmt.bufPrint(hex[i * 2 .. i * 2 + 2], "{x:0>2}", .{b}) catch @panic("hex buf too small");
     }
     try m.setString(16, hex[0 .. bytes.len * 2]);
     _ = allocator;
