@@ -65,7 +65,7 @@ pub fn build(b: *std.Build) void {
     const unit_tests = b.addTest(.{ .root_module = mod });
     test_step.dependOn(&b.addRunArtifact(unit_tests).step);
 
-    for (&[_][]const u8{ "test/tl_test.zig", "test/codec_test.zig", "test/transport_test.zig" }) |src| {
+    for (&[_][]const u8{ "test/tl_test.zig", "test/codec_test.zig", "test/transport_test.zig", "src/crypto/srp.zig" }) |src| {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
                 .root_source_file = b.path(src),
@@ -105,6 +105,24 @@ pub fn build(b: *std.Build) void {
     const run_echo_bot = b.addRunArtifact(echo_bot);
     if (b.args) |args| run_echo_bot.addArgs(args);
     b.step("echo-bot", "Run echo_bot example").dependOn(&run_echo_bot.step);
+
+    const user_login = b.addExecutable(.{
+        .name = "user_login",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/user_login.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "tz", .module = mod },
+                .{ .name = "functions", .module = functions_module },
+            },
+            .link_libc = true,
+        }),
+    });
+    b.installArtifact(user_login);
+    const run_user_login = b.addRunArtifact(user_login);
+    if (b.args) |args| run_user_login.addArgs(args);
+    b.step("user-login", "Run user_login example").dependOn(&run_user_login.step);
 
     // update-schema
     const update_schema = b.step("update-schema", "Fetch latest TL schemas from tdesktop");

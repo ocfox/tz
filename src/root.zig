@@ -14,6 +14,7 @@ pub const crypto = struct {
     pub const aes_ige = @import("crypto/aes_ige.zig");
     pub const rsa = @import("crypto/rsa.zig");
     pub const dh = @import("crypto/dh.zig");
+    pub const srp = @import("crypto/srp.zig");
 };
 pub const transport = struct {
     pub const tcp = @import("transport/tcp.zig");

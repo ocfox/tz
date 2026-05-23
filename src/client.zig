@@ -59,6 +59,10 @@ pub const Entities = struct {
 pub const ClientOptions = struct {
     dc: connector_mod.DC = connector_mod.default_dcs[1],
     bot_token: ?[]const u8 = null,
+    /// Called once after the first successful connection, before the update loop.
+    /// Receives an opaque pointer to the Client; cast with @ptrCast(@alignCast(ptr)).
+    /// Use this for interactive user auth (sendCode / signIn). Ignored when bot_token is set.
+    auth_fn: ?*const fn (*anyopaque, Io) anyerror!void = null,
     api_id: i32,
     api_hash: []const u8,
     storage: storage_mod.SessionStorage,
@@ -197,6 +201,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     };
                     std.log.info("bot authenticated", .{});
                 }
+            } else if (self.opts.auth_fn) |f| {
+                try f(self, io);
             }
             self.fetchDcList(io) catch |err|
                 std.log.warn("failed to fetch DC list: {}", .{err});
@@ -278,6 +284,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     return error.DcMigrate;
                 }
             }
+            if (std.mem.eql(u8, msg, "SESSION_PASSWORD_NEEDED")) return error.SessionPasswordNeeded;
             return error.RpcError;
         }
 
