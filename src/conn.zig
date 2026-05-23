@@ -60,6 +60,12 @@ const PendingRequest = struct {
     }
 };
 
+const LoopResult = union(enum) {
+    read: anyerror!void,
+    write: anyerror!void,
+    ping: anyerror!void,
+};
+
 pub const Conn = struct {
     allocator: Allocator,
     session: session_mod.Session,
@@ -70,9 +76,9 @@ pub const Conn = struct {
     write_queue_buf: [32][]const u8,
     pending: std.AutoHashMap(i64, *PendingRequest),
     pending_mutex: std.Io.Mutex = .init,
-    group: std.Io.Group = .init,
-    ping_group: std.Io.Group = .init,
-    closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    update_group: std.Io.Group = .init,
+    select_buf: [3]LoopResult = undefined,
+    select: ?std.Io.Select(LoopResult) = null,
     initialized: bool = false,
     pong_event: std.Io.Event = .unset,
 
@@ -112,16 +118,19 @@ pub const Conn = struct {
     }
 
     pub fn run(self: *Conn, io: Io, handler: UpdateHandler) !void {
-        try self.group.concurrent(io, readLoop, .{ self, io, handler });
-        try self.group.concurrent(io, writeLoop, .{ self, io });
-        // pingLoop runs in a separate group so it can call close() -> group.cancel()
-        // without deadlocking on its own group.
-        try self.ping_group.concurrent(io, pingLoop, .{ self, io });
+        self.select = std.Io.Select(LoopResult).init(io, &self.select_buf);
+        try self.select.?.concurrent(.read, readLoop, .{ self, io, handler });
+        try self.select.?.concurrent(.write, writeLoop, .{ self, io });
+        try self.select.?.concurrent(.ping, pingLoop, .{ self, io });
     }
 
     pub fn join(self: *Conn, io: Io) void {
-        self.group.await(io) catch {};
-        self.ping_group.await(io) catch {};
+        const s = &(self.select orelse return);
+        // Wait for the first loop to finish (any reason: error, ping timeout, close).
+        // Then cancel the remaining two -- all from this single thread.
+        _ = s.await() catch {};
+        s.cancelDiscard();
+        self.update_group.cancel(io);
     }
 
     pub fn deinit(self: *Conn) void {
@@ -130,17 +139,16 @@ pub const Conn = struct {
         self.allocator.destroy(self);
     }
 
-    // Signals the loops to stop. Safe to call multiple times.
-    // May be called from pingLoop (which is in ping_group, not group).
+    // Close the write path and unblock pingLoop. Safe to call from any thread.
+    // The select will notice when writeLoop or pingLoop exits and cancel the rest.
     pub fn close(self: *Conn, io: Io) void {
-        if (self.closed.swap(true, .acq_rel)) return;
         self.write_queue.close(io);
-        self.group.cancel(io); // cancels readLoop + writeLoop; safe since pingLoop is not in this group
+        self.pong_event.set(io);
     }
 
     fn readLoop(self: *Conn, io: Io, handler: UpdateHandler) !void {
         defer self.drainPending(io);
-        while (!self.closed.load(.acquire)) {
+        while (true) {
             const frame = self.transport.readFrame(io, self.allocator) catch break;
             defer self.allocator.free(frame);
             const payload = self.session.decrypt(frame, self.allocator) catch continue;
@@ -184,7 +192,7 @@ pub const Conn = struct {
             else => {
             const owned = try self.allocator.dupe(u8, payload);
             errdefer self.allocator.free(owned);
-            try self.group.concurrent(io, dispatchUpdate, .{ self, io, handler, owned });
+            try self.update_group.concurrent(io, dispatchUpdate, .{ self, io, handler, owned });
         },
         }
     }
@@ -279,19 +287,16 @@ pub const Conn = struct {
         }
     }
 
-    fn pingLoop(self: *Conn, io: Io) std.Io.Cancelable!void {
+    fn pingLoop(self: *Conn, io: Io) anyerror!void {
         const funcs = @import("functions");
 
-        while (!self.closed.load(.acquire)) {
+        while (true) {
             std.Io.sleep(io, std.Io.Duration.fromSeconds(60), .awake) catch break;
-            if (self.closed.load(.acquire)) break;
 
-            // Random ping_id (same approach as gotd)
             var ping_id_bytes: [8]u8 = undefined;
             io.random(&ping_id_bytes);
             const ping_id = std.mem.readInt(i64, &ping_id_bytes, .little);
 
-            // Encode and send ping_delay_disconnect
             const bytes = codec.encodeAlloc(
                 funcs.PingDelayDisconnect{ .ping_id = ping_id, .disconnect_delay = 75 },
                 self.allocator,
@@ -303,14 +308,12 @@ pub const Conn = struct {
                 break;
             };
 
-            // Wait for pong with 15s timeout
             self.pong_event.reset();
             self.pong_event.waitTimeout(io, .{ .duration = .{
                 .raw = std.Io.Duration.fromSeconds(15),
                 .clock = .awake,
             } }) catch {
-                std.log.warn("ping timeout, closing connection", .{});
-                self.close(io);
+                std.log.warn("ping timeout", .{});
                 break;
             };
         }
