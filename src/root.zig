@@ -1,4 +1,7 @@
+const connector_mod = @import("connector.zig");
+const client_mod = @import("client.zig");
 const codec_mod = @import("codec");
+
 pub const tl = struct {
     pub const codec = codec_mod;
     pub const serialize = codec_mod.serialize;
@@ -22,16 +25,15 @@ pub const session = struct {
     pub const auth_key = @import("session/auth_key.zig");
     pub const auth = @import("session/auth.zig");
 };
-pub const conn = @import("conn.zig");
-pub const Conn = conn.Conn;
-pub const connect = conn.connect;
-pub const DC = conn.DC;
-pub const default_dcs = conn.default_dcs;
+pub const mtproto = @import("mtproto.zig");
+pub const connector = connector_mod;
+pub const Connector = connector_mod.Connector;
+pub const DC = connector_mod.DC;
+pub const default_dcs = connector_mod.default_dcs;
 pub const FileStorage = @import("session/storage.zig").FileStorage;
 pub const MemoryStorage = @import("session/storage.zig").MemoryStorage;
-pub const UpdateHandler = conn.UpdateHandler;
-pub const Client = @import("client.zig").Client;
-pub const ClientOptions = @import("client.zig").ClientOptions;
-pub const Dispatcher = @import("dispatcher.zig").Dispatcher;
-pub const Entities = @import("dispatcher.zig").Entities;
-pub const message = @import("message/sender.zig");
+pub const Client = client_mod.Client;
+pub const ClientOptions = client_mod.ClientOptions;
+pub const Context = client_mod.Context;
+pub const Entities = client_mod.Entities;
+pub const handler = client_mod.handler;

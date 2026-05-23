@@ -2,19 +2,19 @@ const std = @import("std");
 const tz = @import("tz");
 const tg = tz.types;
 
-fn onNewMessage(client: *tz.Client, io: std.Io, entities: tz.Entities, update: tg.UpdateNewMessage) !void {
+fn onNewMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
     const msg = switch (update.message) {
         .Message => |m| m,
         else => return,
     };
     if (msg.out.value != null) return;
     if (msg.message.len == 0) return;
-
-    const sender = tz.message.Sender.init(client);
-    if (sender.reply(entities, update)) |req| {
-        try req.text(io, msg.message);
-    }
+    try ctx.reply(update, msg.message);
 }
+
+const handlers = &.{
+    tz.handler(tg.UpdateNewMessage, onNewMessage),
+};
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -26,28 +26,19 @@ pub fn main() !void {
     const api_hash = std.mem.span(std.c.getenv("TZ_API_HASH") orelse usage());
     const bot_token = std.mem.span(std.c.getenv("TZ_BOT_TOKEN") orelse usage());
 
-    tz.message.initRandomCounter();
-
     var threaded = std.Io.Threaded.init(allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
-    var dispatcher = tz.Dispatcher.init(allocator);
-    defer dispatcher.deinit();
-    try dispatcher.on(tg.UpdateNewMessage, onNewMessage);
-
     var file_storage = tz.FileStorage.init("echo_bot.session");
 
-    const client = try tz.Client.init(allocator, .{
+    const client = try tz.Client(handlers).init(allocator, .{
         .api_id = api_id,
         .api_hash = api_hash,
         .bot_token = bot_token,
         .storage = file_storage.storage(),
-        .handler = dispatcher.handler(),
     });
     defer client.deinit();
-
-    dispatcher.bindClient(client);
 
     try client.run(io);
 }

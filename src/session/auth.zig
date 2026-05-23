@@ -1,6 +1,6 @@
 const std = @import("std");
 const Io = std.Io;
-const Conn = @import("../conn.zig").Conn;
+const Connector = @import("../connector.zig").Connector;
 const ser = @import("codec").serialize;
 
 pub const SignInResult = union(enum) {
@@ -10,7 +10,7 @@ pub const SignInResult = union(enum) {
 
 // TODO: migrate to Client.call + generated types, same as authBot
 pub const UserAuth = struct {
-    pub fn sendCode(conn: *Conn, io: Io, phone: []const u8) !void {
+    pub fn sendCode(conn: *Connector, io: Io, phone: []const u8) !void {
         var buf: [512]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
         try w.writeInt(u32, 0xa677244f, .little);
@@ -22,7 +22,7 @@ pub const UserAuth = struct {
         _ = try conn.call(io, w.buffered());
     }
 
-    pub fn signIn(conn: *Conn, io: Io, phone: []const u8, phone_code_hash: []const u8, code: []const u8) !SignInResult {
+    pub fn signIn(conn: *Connector, io: Io, phone: []const u8, phone_code_hash: []const u8, code: []const u8) !SignInResult {
         var buf: [512]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
         try w.writeInt(u32, 0x8d52a951, .little);
@@ -38,7 +38,7 @@ pub const UserAuth = struct {
         return .success;
     }
 
-    pub fn checkPassword(_: *Conn, _: Io, _: []const u8) !void {
+    pub fn checkPassword(_: *Connector, _: Io, _: []const u8) !void {
         return error.SrpNotImplemented;
     }
 };

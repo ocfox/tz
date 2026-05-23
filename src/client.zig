@@ -1,178 +1,312 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const conn_mod = @import("conn.zig");
-const Conn = conn_mod.Conn;
+const connector_mod = @import("connector.zig");
+const Connector = connector_mod.Connector;
 const storage_mod = @import("session/storage.zig");
 const codec = @import("codec");
 const types = @import("types");
+const functions = @import("functions");
+
+pub const HandlerEntry = struct {
+    cid: u32,
+    dispatchFn: *const fn (ctx: Context, payload: []const u8) anyerror!void,
+};
+
+/// Build a HandlerEntry for a typed update.
+/// cb must be: fn (ctx: Context, update: UpdateType) anyerror!void
+pub fn handler(
+    comptime UpdateType: type,
+    comptime cb: fn (ctx: Context, update: UpdateType) anyerror!void,
+) HandlerEntry {
+    return .{
+        .cid = UpdateType.cid,
+        .dispatchFn = struct {
+            fn dispatch(ctx: Context, payload: []const u8) anyerror!void {
+                var r: std.Io.Reader = .fixed(payload);
+                const update = try codec.decode(UpdateType, &r, ctx.allocator);
+                try cb(ctx, update);
+            }
+        }.dispatch,
+    };
+}
+
+/// Context passed to handler callbacks. Also used internally as RawContext.
+pub const Context = struct {
+    client: *anyopaque,
+    io: Io,
+    allocator: Allocator,
+    entities: Entities,
+    replyFn: *const fn (client: *anyopaque, io: Io, entities: Entities, update: types.UpdateNewMessage, text: []const u8) anyerror!void,
+
+    pub fn reply(self: Context, update: types.UpdateNewMessage, text: []const u8) !void {
+        try self.replyFn(self.client, self.io, self.entities, update, text);
+    }
+};
+
+pub const Entities = struct {
+    users: std.AutoHashMapUnmanaged(i64, i64) = .empty,
+
+    fn deinit(self: *Entities, allocator: Allocator) void {
+        self.users.deinit(allocator);
+    }
+
+    pub fn accessHash(self: *const Entities, user_id: i64) ?i64 {
+        return self.users.get(user_id);
+    }
+};
 
 pub const ClientOptions = struct {
-    dc: conn_mod.DC = conn_mod.default_dcs[1],
+    dc: connector_mod.DC = connector_mod.default_dcs[1],
     bot_token: ?[]const u8 = null,
     api_id: i32,
     api_hash: []const u8,
     storage: storage_mod.SessionStorage,
-    handler: conn_mod.UpdateHandler,
 };
 
-pub const Client = struct {
-    allocator: Allocator,
-    opts: ClientOptions,
-    primary: ?*Conn = null,
-    closed: bool = false,
-    dc_resolved: bool = false,
-    bot_id: ?i64 = null,
+/// Client(handlers) — handlers is a comptime-known slice of HandlerEntry.
+pub fn Client(comptime handlers: []const HandlerEntry) type {
+    return struct {
+        const Self = @This();
 
-    pub fn init(allocator: Allocator, opts: ClientOptions) !*Client {
-        const c = try allocator.create(Client);
-        c.* = .{ .allocator = allocator, .opts = opts };
-        return c;
-    }
+        allocator: Allocator,
+        opts: ClientOptions,
+        primary: ?*Connector = null,
+        closed: bool = false,
+        dc_resolved: bool = false,
+        bot_id: ?i64 = null,
 
-    pub fn deinit(self: *Client) void {
-        self.allocator.destroy(self);
-    }
-
-    /// Blocks until close() is called. Reconnects automatically on disconnect.
-    pub fn run(self: *Client, io: Io) !void {
-        var backoff_ms: u64 = 100;
-        while (!self.closed) {
-            self.runOnce(io) catch |err| {
-                if (self.closed) return;
-                std.log.warn("disconnected: {}, reconnecting in {}ms", .{ err, backoff_ms });
-                std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(backoff_ms)), .awake) catch {};
-                backoff_ms = @min(backoff_ms * 5, 10_000);
-                continue;
-            };
-            backoff_ms = 100;
+        pub fn init(allocator: Allocator, opts: ClientOptions) !*Self {
+            const c = try allocator.create(Self);
+            c.* = .{ .allocator = allocator, .opts = opts };
+            return c;
         }
-    }
 
-    fn runOnce(self: *Client, io: Io) !void {
-        if (!self.dc_resolved) {
-            if (try self.opts.storage.load(io, self.allocator)) |saved| {
-                if (findDc(saved.dc_id, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
-            }
-            self.dc_resolved = true;
+        pub fn deinit(self: *Self) void {
+            self.allocator.destroy(self);
         }
-        std.log.info("connecting to DC {}", .{self.opts.dc.id});
-        const c = try conn_mod.connect(io, self.allocator, .{
-            .dc = self.opts.dc,
-            .transport = .tcp_abridged,
-            .session_storage = self.opts.storage,
-            .api_id = self.opts.api_id,
-            .api_hash = self.opts.api_hash,
-        });
-        std.log.info("connected, auth key ready", .{});
-        defer {
-            c.close(io);
-            c.join(io);
-            c.deinit();
-            self.primary = null;
-        }
-        self.primary = c;
-        try c.run(io, self.opts.handler);
-        if (self.opts.bot_token) |token| {
-            if (self.bot_id == null) {
-                std.log.info("authenticating bot", .{});
-                self.authBot(io, token) catch |err| switch (err) {
-                    error.DcMigrate => {
-                        std.log.info("migrating to DC {}", .{self.opts.dc.id});
-                        return err;
-                    },
-                    else => return err,
+
+        /// Blocks until close() is called. Reconnects automatically on disconnect.
+        pub fn run(self: *Self, io: Io) !void {
+            var backoff_ms: u64 = 100;
+            while (!self.closed) {
+                self.runOnce(io) catch |err| {
+                    if (self.closed) return;
+                    std.log.warn("disconnected: {}, reconnecting in {}ms", .{ err, backoff_ms });
+                    std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(backoff_ms)), .awake) catch {};
+                    backoff_ms = @min(backoff_ms * 5, 10_000);
+                    continue;
                 };
-                std.log.info("bot authenticated", .{});
+                backoff_ms = 100;
             }
         }
-        std.log.info("waiting for updates", .{});
-        c.join(io);
-    }
 
-    pub fn close(self: *Client, io: Io) void {
-        self.closed = true;
-        if (self.primary) |c| c.close(io);
-    }
+        pub fn close(self: *Self, io: Io) void {
+            self.closed = true;
+            if (self.primary) |c| c.close(io);
+        }
 
-    /// Send a typed TL request, return the decoded response.
-    pub fn call(self: *Client, io: Io, request: anytype) !@TypeOf(request).Response {
-        var fba_buf: [4096]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
-        // encodeAlloc into stack buffer; slice points into fba_buf, no heap free needed
-        const bytes = try codec.encodeAlloc(request, fba.allocator());
-        const raw = try self.callRaw(io, bytes);
-        defer self.allocator.free(raw);
-        if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid) {
-            try self.handleRpcError(io, raw);
+        /// Send a typed TL request, return the decoded response.
+        pub fn call(self: *Self, io: Io, request: anytype) !@TypeOf(request).Response {
+            var fba_buf: [4096]u8 = undefined;
+            var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
+            const bytes = try codec.encodeAlloc(request, fba.allocator());
+            const raw = try self.callRaw(io, bytes);
+            defer self.allocator.free(raw);
+            if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid) {
+                try self.handleRpcError(io, raw);
+                return error.RpcError;
+            }
+            var r: std.Io.Reader = .fixed(raw);
+            return codec.decode(@TypeOf(request).Response, &r, self.allocator);
+        }
+
+        fn exec(self: *Self, io: Io, request: anytype) !void {
+            var fba_buf: [4096]u8 = undefined;
+            var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
+            const bytes = try codec.encodeAlloc(request, fba.allocator());
+            const raw = try self.callRaw(io, bytes);
+            defer self.allocator.free(raw);
+            if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid)
+                return self.handleRpcError(io, raw);
+        }
+
+        fn replyImpl(client_ptr: *anyopaque, io: Io, entities: Entities, update: types.UpdateNewMessage, text: []const u8) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(client_ptr));
+            const msg = switch (update.message) {
+                .Message => |m| m,
+                else => return,
+            };
+            const peer: types.InputPeer = switch (msg.peer_id) {
+                .PeerUser => |p| .{ .InputPeerUser = .{
+                    .user_id = p.user_id,
+                    .access_hash = entities.accessHash(p.user_id) orelse return,
+                } },
+                else => return,
+            };
+            _ = try self.call(io, functions.messages.SendMessage{
+                .flags = .{},
+                .peer = peer,
+                .message = text,
+                .random_id = nextRandomId(),
+            });
+        }
+
+        fn runOnce(self: *Self, io: Io) !void {
+            if (!self.dc_resolved) {
+                if (try self.opts.storage.load(io, self.allocator)) |saved| {
+                    if (connector_mod.findDc(saved.dc_id, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
+                }
+                self.dc_resolved = true;
+            }
+            std.log.info("connecting to DC {}", .{self.opts.dc.id});
+            const c = try Connector.connect(io, self.allocator, .{
+                .dc = self.opts.dc,
+                .transport = .tcp_abridged,
+                .session_storage = self.opts.storage,
+                .api_id = self.opts.api_id,
+                .api_hash = self.opts.api_hash,
+            });
+            std.log.info("connected, auth key ready", .{});
+            defer {
+                c.close(io);
+                c.join(io);
+                c.deinit();
+                self.primary = null;
+            }
+            self.primary = c;
+
+            const update_handler: connector_mod.UpdateHandler = .{
+                .ptr = self,
+                .vtable = &.{ .handle = handleUpdate },
+            };
+            try c.run(io, update_handler);
+
+            if (self.opts.bot_token) |token| {
+                if (self.bot_id == null) {
+                    std.log.info("authenticating bot", .{});
+                    self.authBot(io, token) catch |err| switch (err) {
+                        error.DcMigrate => {
+                            std.log.info("migrating to DC {}", .{self.opts.dc.id});
+                            return err;
+                        },
+                        else => return err,
+                    };
+                    std.log.info("bot authenticated", .{});
+                }
+            }
+            std.log.info("waiting for updates", .{});
+            c.join(io);
+        }
+
+        fn authBot(self: *Self, io: Io, token: []const u8) !void {
+            const auth = try self.call(io, functions.auth.ImportBotAuthorization{
+                .flags = 0,
+                .api_id = self.opts.api_id,
+                .api_hash = self.opts.api_hash,
+                .bot_auth_token = token,
+            });
+            switch (auth) {
+                .AuthAuthorization => |a| switch (a.user) {
+                    .User => |u| self.bot_id = u.id,
+                    else => {},
+                },
+                else => {},
+            }
+            try self.exec(io, functions.updates.GetState{});
+        }
+
+        fn callRaw(self: *Self, io: Io, bytes: []const u8) ![]u8 {
+            const c = self.primary orelse return error.NotConnected;
+            if (!c.isInitialized()) {
+                c.setInitialized();
+                const wrapped = try wrapInit(self.allocator, self.opts.api_id, bytes);
+                defer self.allocator.free(wrapped);
+                return c.call(io, wrapped);
+            }
+            return c.call(io, bytes);
+        }
+
+        fn handleRpcError(self: *Self, io: Io, raw: []const u8) !void {
+            if (raw.len < 8) return error.RpcError;
+            const code = std.mem.readInt(i32, raw[4..8], .little);
+            const slen: usize = if (raw.len > 8 and raw[8] < 254) raw[8] else 0;
+            const msg = if (9 + slen <= raw.len) raw[9 .. 9 + slen] else &[_]u8{};
+            std.log.err("rpc_error: code={} msg={s}", .{ code, msg });
+            if (code == 420) {
+                if (std.mem.indexOf(u8, msg, "FLOOD_WAIT_")) |idx| {
+                    const secs = std.fmt.parseInt(u64, msg[idx + "FLOOD_WAIT_".len ..], 10) catch 60;
+                    std.log.warn("flood wait: sleeping {}s", .{secs});
+                    std.Io.sleep(io, std.Io.Duration.fromSeconds(@intCast(secs)), .awake) catch {};
+                }
+            }
+            if (code == 303) {
+                if (parseMigrateDc(raw)) |dc_id| {
+                    self.opts.dc = connector_mod.findDc(dc_id, self.opts.dc.test_server) orelse return error.RpcError;
+                    return error.DcMigrate;
+                }
+            }
             return error.RpcError;
         }
-        var r: std.Io.Reader = .fixed(raw);
-        return codec.decode(@TypeOf(request).Response, &r, self.allocator);
-    }
 
-    /// Send a typed TL request, discard the response (fire-and-check).
-    fn exec(self: *Client, io: Io, request: anytype) !void {
-        var fba_buf: [4096]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
-        const bytes = try codec.encodeAlloc(request, fba.allocator());
-        const raw = try self.callRaw(io, bytes);
-        defer self.allocator.free(raw);
-        if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid)
-            return self.handleRpcError(io, raw);
-    }
+        fn handleUpdate(ptr: *anyopaque, io: Io, payload: []const u8) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            if (payload.len < 4) return;
+            const cid = std.mem.readInt(u32, payload[0..4], .little);
+            if (cid != 0x74ae4240) return; // only Updates_ container
+            self.dispatchUpdates(io, payload) catch |err|
+                std.log.warn("update dispatch error: {}", .{err});
+        }
 
-    fn authBot(self: *Client, io: Io, token: []const u8) !void {
-        const funcs = @import("functions");
-        const auth = try self.call(io, funcs.auth.ImportBotAuthorization{
-            .flags = 0,
-            .api_id = self.opts.api_id,
-            .api_hash = self.opts.api_hash,
-            .bot_auth_token = token,
-        });
-        switch (auth) {
-            .AuthAuthorization => |a| switch (a.user) {
-                .User => |u| self.bot_id = u.id,
+        fn dispatchUpdates(self: *Self, io: Io, payload: []const u8) !void {
+            if (handlers.len == 0) return;
+            var r: std.Io.Reader = .fixed(payload[4..]);
+            const upd = try codec.decodeStructBody(types.Updates_, &r, self.allocator);
+            defer {
+                self.allocator.free(upd.updates);
+                self.allocator.free(upd.users);
+                self.allocator.free(upd.chats);
+            }
+
+            var entities: Entities = .{};
+            defer entities.deinit(self.allocator);
+            for (upd.users) |u| switch (u) {
+                .User => |user| if (user.access_hash.value) |ah|
+                    try entities.users.put(self.allocator, user.id, ah),
                 else => {},
-            },
-            else => {},
-        }
-        try self.exec(io, funcs.updates.GetState{});
-    }
+            };
 
-    fn handleRpcError(self: *Client, io: Io, raw: []const u8) !void {
-        if (raw.len < 8) return error.RpcError;
-        const code = std.mem.readInt(i32, raw[4..8], .little);
-        const slen: usize = if (raw.len > 8 and raw[8] < 254) raw[8] else 0;
-        const msg = if (9 + slen <= raw.len) raw[9 .. 9 + slen] else &[_]u8{};
-        std.log.err("rpc_error: code={} msg={s}", .{ code, msg });
-        if (code == 420) {
-            if (std.mem.indexOf(u8, msg, "FLOOD_WAIT_")) |idx| {
-                const secs = std.fmt.parseInt(u64, msg[idx + "FLOOD_WAIT_".len ..], 10) catch 60;
-                std.log.warn("flood wait: sleeping {}s", .{secs});
-                std.Io.sleep(io, std.Io.Duration.fromSeconds(@intCast(secs)), .awake) catch {};
+            const ctx = Context{
+                .client = self,
+                .io = io,
+                .allocator = self.allocator,
+                .entities = entities,
+                .replyFn = replyImpl,
+            };
+
+            for (upd.updates) |u| {
+                const update_cid: u32 = switch (u) {
+                    inline else => |body| @TypeOf(body).cid,
+                };
+                inline for (handlers) |entry| {
+                    if (update_cid == entry.cid) {
+                        if (codec.encodeAlloc(u, self.allocator)) |encoded| {
+                            defer self.allocator.free(encoded);
+                            entry.dispatchFn(ctx, encoded) catch |err|
+                                std.log.warn("handler error: {}", .{err});
+                        } else |_| {}
+                    }
+                }
             }
         }
-        if (code == 303) {
-            if (parseMigrateDc(raw)) |dc_id| {
-                self.opts.dc = findDc(dc_id, self.opts.dc.test_server) orelse return error.RpcError;
-                return error.DcMigrate;
-            }
-        }
-        return error.RpcError;
-    }
+    };
+}
 
-    fn callRaw(self: *Client, io: Io, bytes: []const u8) ![]u8 {
-        const c = self.primary orelse return error.NotConnected;
-        if (!c.initialized) {
-            c.initialized = true;
-            const wrapped = try wrapInit(self.allocator, self.opts.api_id, bytes);
-            defer self.allocator.free(wrapped);
-            return c.call(io, wrapped);
-        }
-        return c.call(io, bytes);
-    }
-};
+var random_counter = std.atomic.Value(i64).init(0);
+
+fn nextRandomId() i64 {
+    return random_counter.fetchAdd(1, .monotonic);
+}
 
 const layer: i32 = 225;
 
@@ -183,7 +317,7 @@ fn wrapInit(allocator: Allocator, api_id: i32, query_bytes: []const u8) ![]u8 {
     try w.writeInt(u32, 0xda9b0d0d, .little); // invokeWithLayer
     try w.writeInt(i32, layer, .little);
     try w.writeInt(u32, 0xc1cd5ea9, .little); // initConnection
-    try w.writeInt(i32, 0, .little);           // flags
+    try w.writeInt(i32, 0, .little);
     try ser.int(&w, api_id);
     try ser.string(&w, "tz");
     try ser.string(&w, "Zig/0.16");
@@ -205,11 +339,4 @@ fn parseMigrateDc(raw: []const u8) ?u8 {
     const msg = raw[9 .. 9 + slen];
     const idx = std.mem.indexOf(u8, msg, "_MIGRATE_") orelse return null;
     return std.fmt.parseInt(u8, msg[idx + "_MIGRATE_".len ..], 10) catch null;
-}
-
-fn findDc(dc_id: u8, test_server: bool) ?conn_mod.DC {
-    for (conn_mod.default_dcs) |dc| {
-        if (dc.id == dc_id and dc.test_server == test_server) return dc;
-    }
-    return null;
 }
