@@ -74,15 +74,17 @@ pub const Client = struct {
         self.primary = c;
         try c.run(io, self.opts.handler);
         if (self.opts.bot_token) |token| {
-            std.log.info("authenticating bot", .{});
-            self.authBot(io, token) catch |err| switch (err) {
-                error.DcMigrate => {
-                    std.log.info("migrating to DC {}", .{self.opts.dc.id});
-                    return err;
-                },
-                else => return err,
-            };
-            std.log.info("bot authenticated", .{});
+            if (self.bot_id == null) {
+                std.log.info("authenticating bot", .{});
+                self.authBot(io, token) catch |err| switch (err) {
+                    error.DcMigrate => {
+                        std.log.info("migrating to DC {}", .{self.opts.dc.id});
+                        return err;
+                    },
+                    else => return err,
+                };
+                std.log.info("bot authenticated", .{});
+            }
         }
         std.log.info("waiting for updates", .{});
         c.join(io);
@@ -102,7 +104,7 @@ pub const Client = struct {
         const raw = try self.callRaw(io, bytes);
         defer self.allocator.free(raw);
         if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid) {
-            try self.handleRpcError(raw);
+            try self.handleRpcError(io, raw);
             return error.RpcError;
         }
         var r: std.Io.Reader = .fixed(raw);
@@ -117,7 +119,7 @@ pub const Client = struct {
         const raw = try self.callRaw(io, bytes);
         defer self.allocator.free(raw);
         if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid)
-            return self.handleRpcError(raw);
+            return self.handleRpcError(io, raw);
     }
 
     fn authBot(self: *Client, io: Io, token: []const u8) !void {
@@ -138,12 +140,19 @@ pub const Client = struct {
         try self.exec(io, funcs.updates.GetState{});
     }
 
-    fn handleRpcError(self: *Client, raw: []const u8) !void {
+    fn handleRpcError(self: *Client, io: Io, raw: []const u8) !void {
         if (raw.len < 8) return error.RpcError;
         const code = std.mem.readInt(i32, raw[4..8], .little);
         const slen: usize = if (raw.len > 8 and raw[8] < 254) raw[8] else 0;
         const msg = if (9 + slen <= raw.len) raw[9 .. 9 + slen] else &[_]u8{};
         std.log.err("rpc_error: code={} msg={s}", .{ code, msg });
+        if (code == 420) {
+            if (std.mem.indexOf(u8, msg, "FLOOD_WAIT_")) |idx| {
+                const secs = std.fmt.parseInt(u64, msg[idx + "FLOOD_WAIT_".len ..], 10) catch 60;
+                std.log.warn("flood wait: sleeping {}s", .{secs});
+                std.Io.sleep(io, std.Io.Duration.fromSeconds(@intCast(secs)), .awake) catch {};
+            }
+        }
         if (code == 303) {
             if (parseMigrateDc(raw)) |dc_id| {
                 self.opts.dc = findDc(dc_id, self.opts.dc.test_server) orelse return error.RpcError;
