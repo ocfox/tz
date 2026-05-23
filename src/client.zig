@@ -75,6 +75,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         closed: bool = false,
         dc_resolved: bool = false,
         bot_id: ?i64 = null,
+        dc_list: ?[]connector_mod.DC = null,
 
         pub fn init(allocator: Allocator, opts: ClientOptions) !*Self {
             initRandomCounter();
@@ -84,6 +85,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         }
 
         pub fn deinit(self: *Self) void {
+            if (self.dc_list) |list| self.allocator.free(list);
             self.allocator.destroy(self);
         }
 
@@ -196,8 +198,28 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     std.log.info("bot authenticated", .{});
                 }
             }
+            self.fetchDcList(io) catch |err|
+                std.log.warn("failed to fetch DC list: {}", .{err});
             std.log.info("waiting for updates", .{});
             c.join(io);
+        }
+
+        fn fetchDcList(self: *Self, io: Io) !void {
+            const config = try self.call(io, functions.help.GetConfig{});
+            defer self.allocator.free(config.dc_options);
+            var list: std.ArrayList(connector_mod.DC) = .empty;
+            defer list.deinit(self.allocator);
+            for (config.dc_options) |opt| {
+                if (opt.cdn.value != null) continue;
+                if (opt.media_only.value != null) continue;
+                if (opt.ipv6.value != null) continue;
+                const id = std.math.cast(u8, opt.id) orelse continue;
+                const addr = std.Io.net.IpAddress.parseIp4(opt.ip_address, @intCast(opt.port)) catch continue;
+                try list.append(self.allocator, .{ .id = id, .addr = addr, .test_server = self.opts.dc.test_server });
+            }
+            if (self.dc_list) |old| self.allocator.free(old);
+            self.dc_list = try list.toOwnedSlice(self.allocator);
+            std.log.info("DC list updated: {} entries", .{self.dc_list.?.len});
         }
 
         fn authBot(self: *Self, io: Io, token: []const u8) !void {
@@ -215,6 +237,15 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 else => {},
             }
             try self.exec(io, functions.updates.GetState{});
+        }
+
+        fn findDc(self: *const Self, dc_id: u8) ?connector_mod.DC {
+            if (self.dc_list) |list| {
+                for (list) |dc| {
+                    if (dc.id == dc_id) return dc;
+                }
+            }
+            return connector_mod.findDc(dc_id, self.opts.dc.test_server);
         }
 
         fn callRaw(self: *Self, io: Io, bytes: []const u8) ![]u8 {
@@ -243,7 +274,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             }
             if (code == 303) {
                 if (parseMigrateDc(raw)) |dc_id| {
-                    self.opts.dc = connector_mod.findDc(dc_id, self.opts.dc.test_server) orelse return error.RpcError;
+                    self.opts.dc = self.findDc(dc_id) orelse return error.RpcError;
                     return error.DcMigrate;
                 }
             }
