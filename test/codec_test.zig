@@ -25,7 +25,7 @@ test "encode/decode []const u8" {
 }
 
 const TestMsg = struct {
-    pub const tl_id: u32 = 0x12345678;
+    pub const cid: u32 = 0x12345678;
     user_id: i64,
     message: []const u8,
     flags: codec.Flags,
@@ -100,11 +100,11 @@ test "encode/decode []i32 vector" {
 
 const TestUnion = union(enum) {
     foo: struct {
-        pub const tl_id: u32 = 0xaabb0001;
+        pub const cid: u32 = 0xaabb0001;
         x: i32,
     },
     bar: struct {
-        pub const tl_id: u32 = 0xaabb0002;
+        pub const cid: u32 = 0xaabb0002;
     },
 };
 

@@ -124,7 +124,7 @@ fn encodeVectorWriter(slice: anytype, w: *std.Io.Writer) !void {
 }
 
 fn encodeStructWriter(comptime T: type, value: T, w: *std.Io.Writer) !void {
-    if (@hasDecl(T, "tl_id")) try w.writeInt(u32, T.tl_id, .little);
+    if (@hasDecl(T, "cid")) try w.writeInt(u32, T.cid, .little);
     try encodeStructBodyWriter(T, value, w);
 }
 
@@ -164,7 +164,7 @@ fn encodeUnionWriter(comptime T: type, value: T, w: *std.Io.Writer) !void {
             const is_ptr = @typeInfo(VT) == .pointer;
             const BT = if (is_ptr) std.meta.Child(VT) else VT;
             const body = if (is_ptr) variant.* else variant;
-            if (@hasDecl(BT, "tl_id")) try w.writeInt(u32, BT.tl_id, .little);
+            if (@hasDecl(BT, "cid")) try w.writeInt(u32, BT.cid, .little);
             if (BT != void) try encodeStructBodyWriter(BT, body, w);
             return;
         }
@@ -241,10 +241,10 @@ fn encodeVector(slice: anytype, buf: *std.ArrayListUnmanaged(u8), allocator: All
 }
 
 fn encodeStruct(comptime T: type, value: T, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) !void {
-    if (@hasDecl(T, "tl_id")) {
+    if (@hasDecl(T, "cid")) {
         const old = buf.items.len;
         try buf.resize(allocator, old + 4);
-        std.mem.writeInt(u32, buf.items[old..][0..4], T.tl_id, .little);
+        std.mem.writeInt(u32, buf.items[old..][0..4], T.cid, .little);
     }
     try encodeStructBody(T, value, buf, allocator);
 }
@@ -289,10 +289,10 @@ fn encodeUnion(comptime T: type, value: T, buf: *std.ArrayListUnmanaged(u8), all
             const is_ptr = @typeInfo(VT) == .pointer;
             const BT = if (is_ptr) std.meta.Child(VT) else VT;
             const body = if (is_ptr) variant.* else variant;
-            if (@hasDecl(BT, "tl_id")) {
+            if (@hasDecl(BT, "cid")) {
                 const old = buf.items.len;
                 try buf.resize(allocator, old + 4);
-                std.mem.writeInt(u32, buf.items[old..][0..4], BT.tl_id, .little);
+                std.mem.writeInt(u32, buf.items[old..][0..4], BT.cid, .little);
             }
             if (BT != void) {
                 try encodeStructBody(BT, body, buf, allocator);
@@ -357,9 +357,9 @@ fn decodeVector(comptime Child: type, r: *std.Io.Reader, allocator: Allocator) a
 }
 
 fn decodeStruct(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerror!T {
-    if (@hasDecl(T, "tl_id")) {
+    if (@hasDecl(T, "cid")) {
         const cid = try r.takeInt(u32, .little);
-        if (cid != T.tl_id) return error.UnexpectedConstructor;
+        if (cid != T.cid) return error.UnexpectedConstructor;
     }
     return decodeStructBody(T, r, allocator);
 }
@@ -413,7 +413,7 @@ fn decodeUnion(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerr
         const VT = field.type;
         const is_ptr = @typeInfo(VT) == .pointer;
         const BT = if (is_ptr) std.meta.Child(VT) else VT;
-        if (@hasDecl(BT, "tl_id") and BT.tl_id == cid) {
+        if (@hasDecl(BT, "cid") and BT.cid == cid) {
             const body = try decodeStructBody(BT, r, allocator);
             if (is_ptr) {
                 const ptr = try allocator.create(BT);

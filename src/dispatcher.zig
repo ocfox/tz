@@ -3,7 +3,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const conn_mod = @import("conn.zig");
 const UpdateHandler = conn_mod.UpdateHandler;
-const codec = @import("tl_codec");
+const codec = @import("codec");
 const Client = @import("client.zig").Client;
 
 pub const Entities = struct {
@@ -55,7 +55,7 @@ pub const Dispatcher = struct {
                 try cb(client, io, entities, update.*);
             }
         };
-        try self.handlers.put(Update.tl_id, .{ .dispatchFn = Wrap.dispatch });
+        try self.handlers.put(Update.cid, .{ .dispatchFn = Wrap.dispatch });
     }
 
     pub fn handler(self: *Dispatcher) UpdateHandler {
@@ -78,9 +78,9 @@ pub const Dispatcher = struct {
 
     fn dispatchUpdates(self: *Dispatcher, io: Io, payload: []const u8) !void {
         const client = self.client orelse return error.DispatcherNotBound;
-        const tl_types = @import("tl_types");
+        const types = @import("types");
         var r: std.Io.Reader = .fixed(payload[4..]);
-        const upd = try codec.decodeStructBody(tl_types.Updates_, &r, self.allocator);
+        const upd = try codec.decodeStructBody(types.Updates_, &r, self.allocator);
 
         var entities: Entities = .{};
         defer entities.deinit(self.allocator);
@@ -94,7 +94,7 @@ pub const Dispatcher = struct {
             // Pass pointer to the already-decoded update body directly — no re-encode.
             switch (u) {
                 inline else => |*body| {
-                    const entry = self.handlers.get(@TypeOf(body.*).tl_id) orelse continue;
+                    const entry = self.handlers.get(@TypeOf(body.*).cid) orelse continue;
                     entry.dispatchFn(client, io, entities, body, self.allocator) catch |err|
                         std.log.warn("handler error: {}", .{err});
                 },

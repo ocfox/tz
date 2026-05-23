@@ -1,7 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Conn = @import("../conn.zig").Conn;
-const ser = @import("tl_codec").serialize;
+const ser = @import("codec").serialize;
 
 pub const SignInResult = union(enum) {
     success: void,

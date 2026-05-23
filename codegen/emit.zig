@@ -43,7 +43,7 @@ fn tlTypeToZig(
         const zname = names.typeName(tl_type, &nb);
         const ptr = if (box) "*" else "";
         if (qualify_unions)
-            return std.fmt.allocPrint(arena, "{s}@import(\"tl_types\").{s}", .{ ptr, zname });
+            return std.fmt.allocPrint(arena, "{s}@import(\"types\").{s}", .{ ptr, zname });
         return std.fmt.allocPrint(arena, "{s}{s}", .{ ptr, zname });
     }
 
@@ -72,7 +72,7 @@ pub fn emitTypes(
         seen.deinit();
     }
 
-    try buf.appendSlice(allocator, "// AUTO-GENERATED — do not edit\nconst tl = @import(\"tl_codec\");\n\n");
+    try buf.appendSlice(allocator, "const tl = @import(\"codec\");\n\n");
 
     var name_buf: [256]u8 = undefined;
     var field_buf: [256]u8 = undefined;
@@ -107,7 +107,7 @@ pub fn emitTypes(
         defer allocator.free(ctor_name);
 
         try buf.print(allocator, "pub const {s} = struct {{\n", .{ctor_name});
-        try buf.print(allocator, "    pub const tl_id: u32 = 0x{x:0>8};\n", .{ctor.id});
+        try buf.print(allocator, "    pub const cid: u32 = 0x{x:0>8};\n", .{ctor.id});
 
         const is_rec = metadata.isRecursive(ctor);
         for (ctor.params) |p| {
@@ -215,7 +215,7 @@ pub fn emitFunctions(
         try res.value_ptr.append(allocator, ctor);
     }
 
-    try buf.appendSlice(allocator, "// AUTO-GENERATED — do not edit\nconst tl = @import(\"tl_codec\");\n\n");
+    try buf.appendSlice(allocator, "const tl = @import(\"codec\");\n\n");
     var name_buf: [256]u8 = undefined;
     var resp_buf: [256]u8 = undefined;
     var field_buf: [256]u8 = undefined;
@@ -232,7 +232,7 @@ pub fn emitFunctions(
                 ctor.name;
             const fn_name = names.typeName(bare_name, &name_buf);
             try buf.print(allocator, "{s}pub const {s} = struct {{\n", .{ indent, fn_name });
-            try buf.print(allocator, "{s}    pub const tl_id: u32 = 0x{x:0>8};\n", .{ indent, ctor.id });
+            try buf.print(allocator, "{s}    pub const cid: u32 = 0x{x:0>8};\n", .{ indent, ctor.id });
 
             for (ctor.params) |p| {
                 if (p.is_flags) {
@@ -253,7 +253,7 @@ pub fn emitFunctions(
                 try buf.print(allocator, "{s}    pub const Response = {s};\n", .{ indent, resp_type });
             } else {
                 const resp = names.typeName(ctor.result_type, &resp_buf);
-                try buf.print(allocator, "{s}    pub const Response = @import(\"tl_types\").{s};\n", .{ indent, resp });
+                try buf.print(allocator, "{s}    pub const Response = @import(\"types\").{s};\n", .{ indent, resp });
             }
             try buf.print(allocator, "{s}}};\n\n", .{indent});
         }

@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const codec = b.createModule(.{
+    const codec_module = b.createModule(.{
         .root_source_file = b.path("src/tl/codec.zig"),
         .target = target,
         .optimize = optimize,
@@ -24,21 +24,21 @@ pub fn build(b: *std.Build) void {
     run_codegen.addFileArg(b.path("schema/api.tl"));
     const gen_dir = run_codegen.addOutputDirectoryArg("generated");
 
-    const tl_types = b.createModule(.{
+    const types_module = b.createModule(.{
         .root_source_file = gen_dir.path(b, "types.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "tl_codec", .module = codec },
+            .{ .name = "codec", .module = codec_module },
         },
     });
-    const tl_functions = b.createModule(.{
+    const functions_module = b.createModule(.{
         .root_source_file = gen_dir.path(b, "functions.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "tl_codec", .module = codec },
-            .{ .name = "tl_types", .module = tl_types },
+            .{ .name = "codec", .module = codec_module },
+            .{ .name = "types", .module = types_module },
         },
     });
 
@@ -47,9 +47,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "tl_codec", .module = codec },
-            .{ .name = "tl_types", .module = tl_types },
-            .{ .name = "tl_functions", .module = tl_functions },
+            .{ .name = "codec", .module = codec_module },
+            .{ .name = "types", .module = types_module },
+            .{ .name = "functions", .module = functions_module },
         },
     });
 

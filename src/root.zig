@@ -1,11 +1,11 @@
-const tl_codec = @import("tl_codec");
+const codec_mod = @import("codec");
 pub const tl = struct {
-    pub const codec = tl_codec;
-    pub const serialize = tl_codec.serialize;
-    pub const deserialize = tl_codec.deserialize;
+    pub const codec = codec_mod;
+    pub const serialize = codec_mod.serialize;
+    pub const deserialize = codec_mod.deserialize;
 };
-pub const types = @import("tl_types");
-pub const functions = @import("tl_functions");
+pub const types = @import("types");
+pub const functions = @import("functions");
 pub const crypto = struct {
     pub const sha = @import("crypto/sha.zig");
     pub const aes_ige = @import("crypto/aes_ige.zig");

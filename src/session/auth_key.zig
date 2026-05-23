@@ -5,8 +5,8 @@ const tcp = @import("../transport/tcp.zig");
 const sha = @import("../crypto/sha.zig");
 const rsa = @import("../crypto/rsa.zig");
 const dh = @import("../crypto/dh.zig");
-const ser = @import("tl_codec").serialize;
-const de = @import("tl_codec").deserialize;
+const ser = @import("codec").serialize;
+const de = @import("codec").deserialize;
 
 const server_key_n: [256]u8 = .{
     0xc1, 0x50, 0x02, 0x3e, 0x2f, 0x70, 0xdb, 0x79, 0x85, 0xde, 0xd0, 0x64, 0x75, 0x9c, 0xfe, 0xcf,

@@ -5,18 +5,12 @@ const tcp = @import("transport/tcp.zig");
 const session_mod = @import("session/message.zig");
 const storage_mod = @import("session/storage.zig");
 const auth_key_mod = @import("session/auth_key.zig");
-const tl_types = @import("tl_types");
-const codec = @import("tl_codec");
+const types = @import("types");
+const codec = @import("codec");
 
-// MTProto system message type IDs
-const cid_msg_container: u32 = 0x73f1f8dc; // not in schema
-const cid_rpc_result: u32 = 0xf35c6d01;    // not in schema
-const cid_msgs_ack: u32 = tl_types.MsgsAck.tl_id;
-const cid_new_session_created: u32 = tl_types.NewSessionCreated.tl_id;
-const cid_bad_server_salt: u32 = tl_types.BadServerSalt.tl_id;
-const cid_bad_msg_notification: u32 = tl_types.BadMsgNotification_.tl_id;
-const cid_rpc_error: u32 = tl_types.RpcError.tl_id;
-const cid_pong: u32 = tl_types.Pong.tl_id;
+// MTProto internal IDs not in schema
+const cid_msg_container: u32 = 0x73f1f8dc;
+const cid_rpc_result: u32 = 0xf35c6d01;
 
 pub const DC = struct {
     id: u8,
@@ -160,13 +154,13 @@ pub const Conn = struct {
         switch (cid) {
             cid_msg_container => try self.dispatchContainer(io, payload, handler),
             cid_rpc_result => try self.deliverRpcResult(io, payload),
-            cid_msgs_ack => {},
-            cid_new_session_created => {
+            types.MsgsAck.cid => {},
+            types.NewSessionCreated.cid => {
                 if (payload.len >= 28) {
                     self.session.server_salt = std.mem.readInt(i64, payload[20..28], .little);
                 }
             },
-            cid_bad_server_salt => {
+            types.BadServerSalt.cid => {
                 // bad_server_salt: cid(4) + bad_msg_id(8) + bad_msg_seqno(4) + error_code(4) + new_server_salt(8)
                 if (payload.len >= 28) {
                     const new_salt = std.mem.readInt(i64, payload[20..28], .little);
@@ -178,13 +172,13 @@ pub const Conn = struct {
                     self.drainPending(io);
                 }
             },
-            cid_bad_msg_notification => {
+            types.BadMsgNotification_.cid => {
                 std.log.warn("bad_msg_notification", .{});
                 self.drainPending(io);
             },
-            cid_pong => {
+            types.Pong.cid => {
                 var r: std.Io.Reader = .fixed(payload[4..]);
-                const pong = codec.decode(tl_types.Pong, &r, self.allocator) catch return;
+                const pong = codec.decode(types.Pong, &r, self.allocator) catch return;
                 self.pong_queue.putOne(io, pong.ping_id) catch {};
             },
             else => {
@@ -286,7 +280,7 @@ pub const Conn = struct {
     }
 
     fn pingLoop(self: *Conn, io: Io) std.Io.Cancelable!void {
-        const funcs = @import("tl_functions");
+        const funcs = @import("functions");
 
         const PingSelect = std.Io.Select(union(enum) {
             pong: (std.Io.QueueClosedError || std.Io.Cancelable)!i64,

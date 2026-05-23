@@ -3,9 +3,9 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const conn_mod = @import("conn.zig");
 const Conn = conn_mod.Conn;
-const cid_rpc_error: u32 = 0x2144ca19;
 const storage_mod = @import("session/storage.zig");
-const codec = @import("tl_codec");
+const codec = @import("codec");
+const types = @import("types");
 
 pub const ClientOptions = struct {
     dc: conn_mod.DC = conn_mod.default_dcs[1],
@@ -101,7 +101,7 @@ pub const Client = struct {
         const bytes = try codec.encodeAlloc(request, fba.allocator());
         const raw = try self.callRaw(io, bytes);
         defer self.allocator.free(raw);
-        if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == cid_rpc_error) {
+        if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid) {
             try self.handleRpcError(raw);
             return error.RpcError;
         }
@@ -116,12 +116,12 @@ pub const Client = struct {
         const bytes = try codec.encodeAlloc(request, fba.allocator());
         const raw = try self.callRaw(io, bytes);
         defer self.allocator.free(raw);
-        if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == cid_rpc_error)
+        if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid)
             return self.handleRpcError(raw);
     }
 
     fn authBot(self: *Client, io: Io, token: []const u8) !void {
-        const funcs = @import("tl_functions");
+        const funcs = @import("functions");
         const auth = try self.call(io, funcs.auth.ImportBotAuthorization{
             .flags = 0,
             .api_id = self.opts.api_id,
@@ -168,7 +168,7 @@ pub const Client = struct {
 const layer: i32 = 225;
 
 fn wrapInit(allocator: Allocator, api_id: i32, query_bytes: []const u8) ![]u8 {
-    const ser = @import("tl_codec").serialize;
+    const ser = @import("codec").serialize;
     var hdr: [256]u8 = undefined;
     var w: std.Io.Writer = .fixed(&hdr);
     try w.writeInt(u32, 0xda9b0d0d, .little); // invokeWithLayer
