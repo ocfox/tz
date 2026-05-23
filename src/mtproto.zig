@@ -9,6 +9,7 @@ const types = @import("types");
 // MTProto internal IDs not in schema
 const cid_msg_container: u32 = 0x73f1f8dc;
 const cid_rpc_result: u32 = 0xf35c6d01;
+const cid_gzip_packed: u32 = 0x3072cfa1;
 
 const PendingRequest = struct {
     buf: [1][]u8 = undefined,
@@ -148,6 +149,17 @@ pub fn MtProto(comptime Handler: type) type {
             switch (cid) {
                 cid_msg_container => try self.dispatchContainer(io, payload),
                 cid_rpc_result => try self.deliverRpcResult(io, payload),
+                cid_gzip_packed => {
+                    var r: std.Io.Reader = .fixed(payload[4..]);
+                    const compressed = try codec.deserialize.bytes(&r, self.allocator);
+                    defer self.allocator.free(compressed);
+                    var in = std.Io.Reader.fixed(compressed);
+                    var aw: std.Io.Writer.Allocating = .init(self.allocator);
+                    defer aw.deinit();
+                    var decomp: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
+                    _ = try decomp.reader.streamRemaining(&aw.writer);
+                    try self.dispatch(io, aw.written());
+                },
                 types.MsgsAck.cid => {},
                 types.NewSessionCreated.cid => {
                     if (payload.len >= 28) {

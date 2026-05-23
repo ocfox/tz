@@ -359,6 +359,17 @@ fn decodeVector(comptime Child: type, r: *std.Io.Reader, allocator: Allocator) a
 fn decodeStruct(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerror!T {
     if (@hasDecl(T, "cid")) {
         const cid = try r.takeInt(u32, .little);
+        if (cid == 0x3072cfa1) { // gzip_packed
+            const compressed = try de.bytes(r, allocator);
+            defer allocator.free(compressed);
+            var in = std.Io.Reader.fixed(compressed);
+            var aw: std.Io.Writer.Allocating = .init(allocator);
+            defer aw.deinit();
+            var decomp: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
+            _ = try decomp.reader.streamRemaining(&aw.writer);
+            var dr = std.Io.Reader.fixed(aw.written());
+            return decodeStruct(T, &dr, allocator);
+        }
         if (cid != T.cid) return error.UnexpectedConstructor;
     }
     return decodeStructBody(T, r, allocator);
