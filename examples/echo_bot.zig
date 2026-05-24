@@ -10,9 +10,8 @@ fn onNewMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
         .Message => |m| m,
         else => return,
     };
-    // Ignore empty messages.
     if (msg.message.len == 0) return;
-    try ctx.reply(update, msg.message);
+    try tz.helpers.reply(ctx, update, msg.message, .{});
 }
 
 // Compile-time handler list. No runtime hashmap, no dispatcher to .init() or .bind().

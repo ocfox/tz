@@ -37,3 +37,5 @@ pub const ClientOptions = client_mod.ClientOptions;
 pub const Context = client_mod.Context;
 pub const Entities = client_mod.Entities;
 pub const handler = client_mod.handler;
+pub const nextRandomId = client_mod.nextRandomId;
+pub const helpers = @import("helpers.zig");

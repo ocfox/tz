@@ -31,16 +31,25 @@ pub fn handler(
     };
 }
 
-/// Context passed to handler callbacks. Also used internally as RawContext.
+/// Context passed to handler callbacks.
 pub const Context = struct {
     client: *anyopaque,
     io: Io,
     allocator: Allocator,
     entities: Entities,
-    replyFn: *const fn (client: *anyopaque, io: Io, entities: Entities, update: types.UpdateNewMessage, text: []const u8) anyerror!void,
+    /// callFn encodes the full RPC round-trip including error handling.
+    /// Returns an owned slice (caller must free); errors include RpcError, DcMigrate, etc.
+    callFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
 
-    pub fn reply(self: Context, update: types.UpdateNewMessage, text: []const u8) !void {
-        try self.replyFn(self.client, self.io, self.entities, update, text);
+    /// Send a typed TL request, return the decoded response.
+    pub fn call(self: Context, request: anytype) !@TypeOf(request).Response {
+        var fba_buf: [4096]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
+        const bytes = try codec.encodeAlloc(request, fba.allocator());
+        const raw = try self.callFn(self.client, self.io, bytes);
+        defer self.allocator.free(raw);
+        var r: std.Io.Reader = .fixed(raw);
+        return codec.decode(@TypeOf(request).Response, &r, self.allocator);
     }
 };
 
@@ -150,31 +159,15 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 return self.handleRpcError(io, raw);
         }
 
-        fn replyImpl(client_ptr: *anyopaque, io: Io, entities: Entities, update: types.UpdateNewMessage, text: []const u8) anyerror!void {
-            const self: *Self = @ptrCast(@alignCast(client_ptr));
-            const msg = switch (update.message) {
-                .Message => |m| m,
-                else => return,
-            };
-            const peer: types.InputPeer = switch (msg.peer_id) {
-                .PeerUser => |p| .{ .InputPeerUser = .{
-                    .user_id = p.user_id,
-                    .access_hash = entities.accessHash(p.user_id) orelse return,
-                } },
-                .PeerChat => |p| .{ .InputPeerChat = .{
-                    .chat_id = p.chat_id,
-                } },
-                .PeerChannel => |p| .{ .InputPeerChannel = .{
-                    .channel_id = p.channel_id,
-                    .access_hash = entities.channelAccessHash(p.channel_id) orelse return,
-                } },
-            };
-            _ = try self.call(io, functions.messages.SendMessage{
-                .flags = .{},
-                .peer = peer,
-                .message = text,
-                .random_id = nextRandomId(),
-            });
+        fn callImpl(ptr: *anyopaque, io2: Io, bytes: []const u8) anyerror![]u8 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            const raw = try self.callRaw(io2, bytes);
+            if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid) {
+                defer self.allocator.free(raw);
+                try self.handleRpcError(io2, raw);
+                return error.RpcError;
+            }
+            return raw;
         }
 
         fn runOnce(self: *Self, io: Io) !void {
@@ -348,7 +341,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .io = io,
                 .allocator = self.allocator,
                 .entities = entities,
-                .replyFn = replyImpl,
+                .callFn = callImpl,
             };
 
             for (upd.updates) |u| {
@@ -371,7 +364,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
 var random_counter = std.atomic.Value(i64).init(0);
 
-fn nextRandomId() i64 {
+pub fn nextRandomId() i64 {
     return random_counter.fetchAdd(1, .monotonic);
 }
 
