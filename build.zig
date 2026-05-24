@@ -81,7 +81,6 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{.{ .name = "tz", .module = mod }},
-            .link_libc = true,
         }),
     });
     const run_echo_bot = b.addRunArtifact(echo_bot);
@@ -95,7 +94,6 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{.{ .name = "tz", .module = mod }},
-            .link_libc = true,
         }),
     });
     const run_any_call = b.addRunArtifact(any_call);
@@ -112,7 +110,6 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "tz", .module = mod },
                 .{ .name = "functions", .module = functions_module },
             },
-            .link_libc = true,
         }),
     });
     const run_user_login = b.addRunArtifact(user_login);
@@ -126,7 +123,6 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{.{ .name = "tz", .module = mod }},
-            .link_libc = true,
         }),
     });
     const run_feature_demo = b.addRunArtifact(feature_demo);

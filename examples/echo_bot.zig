@@ -19,7 +19,7 @@ const handlers = &.{
     tz.handler(tg.UpdateNewMessage, onNewMessage),
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
     // A debug allocator catches leaks and double-frees when the program exits.
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -36,9 +36,9 @@ pub fn main() !void {
 
     // Credentials are read from environment and wired directly into Client.
     const client = try tz.Client(handlers).init(allocator, .{
-        .api_id = try std.fmt.parseInt(i32, std.mem.span(std.c.getenv("TZ_API_ID") orelse usage()), 10),
-        .api_hash = std.mem.span(std.c.getenv("TZ_API_HASH") orelse usage()),
-        .bot_token = std.mem.span(std.c.getenv("TZ_BOT_TOKEN") orelse usage()),
+        .api_id = try std.fmt.parseInt(i32, init.environ.getPosix("TZ_API_ID") orelse usage(), 10),
+        .api_hash = init.environ.getPosix("TZ_API_HASH") orelse usage(),
+        .bot_token = init.environ.getPosix("TZ_BOT_TOKEN") orelse usage(),
         .storage = file_storage.storage(),
     });
     defer client.deinit();

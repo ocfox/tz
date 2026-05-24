@@ -4,9 +4,11 @@ const tg = tz.types;
 const f = tz.functions;
 const h = tz.helpers;
 
+var g_environ: std.process.Environ = .empty;
+
 fn isAllowed(msg: tg.Message_) bool {
-    const env = std.c.getenv("TZ_OWNER_ID") orelse return true;
-    const owner_id = std.fmt.parseInt(i64, std.mem.span(env), 10) catch return true;
+    const env = g_environ.getPosix("TZ_OWNER_ID") orelse return true;
+    const owner_id = std.fmt.parseInt(i64, env, 10) catch return true;
     return switch (msg.peer_id) {
         .PeerUser => |p| p.user_id == owner_id,
         else => false,
@@ -299,7 +301,9 @@ const handlers = &.{
     tz.handler(tg.UpdateBotCallbackQuery, onCallback),
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
+    g_environ = init.environ;
+
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -311,9 +315,9 @@ pub fn main() !void {
     var file_storage = tz.FileStorage.init("pill.session");
 
     const client = try tz.Client(handlers).init(allocator, .{
-        .api_id = try std.fmt.parseInt(i32, std.mem.span(std.c.getenv("TZ_API_ID") orelse usage()), 10),
-        .api_hash = std.mem.span(std.c.getenv("TZ_API_HASH") orelse usage()),
-        .bot_token = std.mem.span(std.c.getenv("TZ_BOT_TOKEN") orelse usage()),
+        .api_id = try std.fmt.parseInt(i32, init.environ.getPosix("TZ_API_ID") orelse usage(), 10),
+        .api_hash = init.environ.getPosix("TZ_API_HASH") orelse usage(),
+        .bot_token = init.environ.getPosix("TZ_BOT_TOKEN") orelse usage(),
         .storage = file_storage.storage(),
     });
     defer client.deinit();

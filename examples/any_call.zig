@@ -72,7 +72,7 @@ const handlers = &.{
     tz.handler(tg.UpdateNewMessage, onEcho),
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -84,9 +84,9 @@ pub fn main() !void {
     var file_storage = tz.FileStorage.init("any_call.session");
 
     const client = try tz.Client(handlers).init(allocator, .{
-        .api_id = try std.fmt.parseInt(i32, std.mem.span(std.c.getenv("TZ_API_ID") orelse usage()), 10),
-        .api_hash = std.mem.span(std.c.getenv("TZ_API_HASH") orelse usage()),
-        .bot_token = std.mem.span(std.c.getenv("TZ_BOT_TOKEN") orelse usage()),
+        .api_id = try std.fmt.parseInt(i32, init.environ.getPosix("TZ_API_ID") orelse usage(), 10),
+        .api_hash = init.environ.getPosix("TZ_API_HASH") orelse usage(),
+        .bot_token = init.environ.getPosix("TZ_BOT_TOKEN") orelse usage(),
         .storage = file_storage.storage(),
     });
     defer client.deinit();

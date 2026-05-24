@@ -77,7 +77,7 @@ fn signIn2FA(client: *Client, io: std.Io) !void {
     });
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -89,8 +89,8 @@ pub fn main() !void {
     var file_storage = tz.FileStorage.init("user_login.session");
 
     const client = try Client.init(allocator, .{
-        .api_id = try std.fmt.parseInt(i32, std.mem.span(std.c.getenv("TZ_API_ID") orelse usage()), 10),
-        .api_hash = std.mem.span(std.c.getenv("TZ_API_HASH") orelse usage()),
+        .api_id = try std.fmt.parseInt(i32, init.environ.getPosix("TZ_API_ID") orelse usage(), 10),
+        .api_hash = init.environ.getPosix("TZ_API_HASH") orelse usage(),
         .auth_fn = userAuth,
         .storage = file_storage.storage(),
     });
