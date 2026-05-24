@@ -94,7 +94,7 @@ pub const Connector = struct {
         };
 
         const auth_key_result = blk: {
-            if (try opts.session_storage.load(io, allocator)) |saved| {
+            if (try opts.session_storage.load(io, allocator, opts.dc.id)) |saved| {
                 if (saved.dc_id != 0 and saved.dc_id == opts.dc.id) {
                     std.log.info("loaded existing session (dc={})", .{saved.dc_id});
                     break :blk auth_key_mod.AuthKeyResult{

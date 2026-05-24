@@ -15,12 +15,12 @@ pub const SessionStorage = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        load: *const fn (*anyopaque, Io, Allocator) anyerror!?SessionData,
+        load: *const fn (*anyopaque, Io, Allocator, dc_id: u8) anyerror!?SessionData,
         save: *const fn (*anyopaque, Io, SessionData) anyerror!void,
     };
 
-    pub fn load(self: SessionStorage, io: Io, allocator: Allocator) !?SessionData {
-        return self.vtable.load(self.ptr, io, allocator);
+    pub fn load(self: SessionStorage, io: Io, allocator: Allocator, dc_id: u8) !?SessionData {
+        return self.vtable.load(self.ptr, io, allocator, dc_id);
     }
     pub fn save(self: SessionStorage, io: Io, data: SessionData) !void {
         return self.vtable.save(self.ptr, io, data);
@@ -28,22 +28,25 @@ pub const SessionStorage = struct {
 };
 
 pub const MemoryStorage = struct {
-    data: ?SessionData = null,
+    slots: [8]?SessionData = .{null} ** 8,
 
     pub fn storage(self: *MemoryStorage) SessionStorage {
         return .{ .ptr = self, .vtable = &vtable };
     }
     const vtable = SessionStorage.VTable{ .load = load, .save = save };
-    fn load(ptr: *anyopaque, _: Io, _: Allocator) anyerror!?SessionData {
+    fn load(ptr: *anyopaque, _: Io, _: Allocator, dc_id: u8) anyerror!?SessionData {
         const self: *MemoryStorage = @ptrCast(@alignCast(ptr));
-        return self.data;
+        if (dc_id >= self.slots.len) return null;
+        return self.slots[dc_id];
     }
     fn save(ptr: *anyopaque, _: Io, data: SessionData) anyerror!void {
         const self: *MemoryStorage = @ptrCast(@alignCast(ptr));
-        self.data = data;
+        if (data.dc_id < self.slots.len) self.slots[data.dc_id] = data;
     }
 };
 
+/// Session storage backed by a single file with fixed 280-byte segments,
+/// one per DC ID (segment at offset dc_id * @sizeOf(SessionData)).
 pub const FileStorage = struct {
     path: []const u8,
 
@@ -54,45 +57,8 @@ pub const FileStorage = struct {
         return .{ .ptr = self, .vtable = &vtable };
     }
     const vtable = SessionStorage.VTable{ .load = load, .save = save };
-    fn load(ptr: *anyopaque, io: Io, _: Allocator) anyerror!?SessionData {
+    fn load(ptr: *anyopaque, io: Io, _: Allocator, dc_id: u8) anyerror!?SessionData {
         const self: *FileStorage = @ptrCast(@alignCast(ptr));
-        const cwd = Io.Dir.cwd();
-        const file = cwd.openFile(io, self.path, .{}) catch |err| switch (err) {
-            error.FileNotFound => return null,
-            else => return err,
-        };
-        defer file.close(io);
-        // SAFETY: immediately overwritten by readPositionalAll below
-        var data: SessionData = undefined;
-        const n = try file.readPositionalAll(io, std.mem.asBytes(&data), 0);
-        if (n != @sizeOf(SessionData)) return null;
-        return data;
-    }
-    fn save(ptr: *anyopaque, io: Io, data: SessionData) anyerror!void {
-        const self: *FileStorage = @ptrCast(@alignCast(ptr));
-        const cwd = Io.Dir.cwd();
-        const file = try cwd.createFile(io, self.path, .{});
-        defer file.close(io);
-        try file.writePositionalAll(io, std.mem.asBytes(&data), 0);
-    }
-};
-
-/// Session storage backed by a single file containing fixed 280-byte segments,
-/// one per DC ID (segment at offset dc_id * @sizeOf(SessionData)).
-/// Allows multiple DCs to share one file without truncating each other's data.
-pub const MultiDcFileStorage = struct {
-    path: []const u8,
-    dc_id: u8,
-
-    pub fn init(path: []const u8, dc_id: u8) MultiDcFileStorage {
-        return .{ .path = path, .dc_id = dc_id };
-    }
-    pub fn storage(self: *MultiDcFileStorage) SessionStorage {
-        return .{ .ptr = self, .vtable = &vtable };
-    }
-    const vtable = SessionStorage.VTable{ .load = load, .save = save };
-    fn load(ptr: *anyopaque, io: Io, _: Allocator) anyerror!?SessionData {
-        const self: *MultiDcFileStorage = @ptrCast(@alignCast(ptr));
         const file = Io.Dir.cwd().openFile(io, self.path, .{}) catch |err| switch (err) {
             error.FileNotFound => return null,
             else => return err,
@@ -100,15 +66,15 @@ pub const MultiDcFileStorage = struct {
         defer file.close(io);
         // SAFETY: immediately overwritten by readPositionalAll
         var data: SessionData = undefined;
-        const offset: u64 = @as(u64, self.dc_id) * @sizeOf(SessionData);
+        const offset: u64 = @as(u64, dc_id) * @sizeOf(SessionData);
         const n = try file.readPositionalAll(io, std.mem.asBytes(&data), offset);
         if (n != @sizeOf(SessionData)) return null;
         if (data.auth_key_id == 0) return null;
         return data;
     }
     fn save(ptr: *anyopaque, io: Io, data: SessionData) anyerror!void {
-        const self: *MultiDcFileStorage = @ptrCast(@alignCast(ptr));
-        // truncate=false: create if not exists, append/update if exists.
+        const self: *FileStorage = @ptrCast(@alignCast(ptr));
+        // truncate=false: create if not exists, update slot in place if exists.
         const file = try Io.Dir.cwd().createFile(io, self.path, .{ .truncate = false });
         defer file.close(io);
         const offset: u64 = @as(u64, data.dc_id) * @sizeOf(SessionData);
@@ -119,14 +85,14 @@ pub const MultiDcFileStorage = struct {
 test "MemoryStorage load/save roundtrip" {
     var mem = MemoryStorage{};
     const s = mem.storage();
-    try std.testing.expect(try s.load(std.Io.failing, std.testing.allocator) == null);
+    try std.testing.expect(try s.load(std.Io.failing, std.testing.allocator, 2) == null);
     var data: SessionData = undefined;
     @memset(&data.auth_key, 0xab);
     data.auth_key_id = 12345;
     data.server_salt = -99;
     data.dc_id = 2;
     try s.save(std.Io.failing, data);
-    const loaded = try s.load(std.Io.failing, std.testing.allocator);
+    const loaded = try s.load(std.Io.failing, std.testing.allocator, 2);
     try std.testing.expect(loaded != null);
     try std.testing.expectEqualSlices(u8, &data.auth_key, &loaded.?.auth_key);
     try std.testing.expectEqual(data.auth_key_id, loaded.?.auth_key_id);
@@ -145,7 +111,7 @@ test "FileStorage load/save roundtrip" {
     data.server_salt = 42;
     data.dc_id = 1;
     try s.save(io, data);
-    const loaded = (try s.load(io, std.testing.allocator)).?;
+    const loaded = (try s.load(io, std.testing.allocator, 1)).?;
     try std.testing.expectEqualSlices(u8, &data.auth_key, &loaded.auth_key);
     try std.testing.expectEqual(data.dc_id, loaded.dc_id);
     Io.Dir.cwd().deleteFile(io, path) catch {};

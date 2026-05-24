@@ -13,17 +13,6 @@ pub const HandlerEntry = struct {
     dispatchFn: *const fn (ctx: Context, update: types.Update) anyerror!void,
 };
 
-const SubConn = struct {
-    connector: *Connector,
-    mem_storage: storage_mod.MemoryStorage = .{},
-    file_storage: ?storage_mod.MultiDcFileStorage = null,
-
-    fn sessionStorage(self: *SubConn) storage_mod.SessionStorage {
-        if (self.file_storage) |*fs| return fs.storage();
-        return self.mem_storage.storage();
-    }
-};
-
 var sub_conn_dummy: u8 = 0;
 const sub_conn_noop_handler = connector_mod.UpdateHandler{
     .ptr = &sub_conn_dummy,
@@ -124,9 +113,6 @@ pub const ClientOptions = struct {
     api_id: i32,
     api_hash: []const u8,
     storage: storage_mod.SessionStorage,
-    /// Path for persisting file-DC sessions as 280-byte segments (offset = dc_id * 280).
-    /// When set, sub-connections skip DH on reconnect. Safe to share with the main session file.
-    session_path: ?[]const u8 = null,
 };
 
 /// Client(handlers) — handlers is a comptime-known slice of HandlerEntry.
@@ -142,7 +128,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         bot_id: ?i64 = null,
         user_authorized: bool = false,
         dc_list: ?[]connector_mod.DC = null,
-        sub_conns: std.AutoHashMapUnmanaged(u8, *SubConn) = .empty,
+        sub_conns: std.AutoHashMapUnmanaged(u8, *Connector) = .empty,
         sub_conns_mu: std.Io.Mutex = std.Io.Mutex.init,
 
         pub fn init(allocator: Allocator, opts: ClientOptions) !*Self {
@@ -156,10 +142,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             if (self.dc_list) |list| self.allocator.free(list);
             // Sub-conns should have been closed in runOnce's defer; clean up any stragglers.
             var it = self.sub_conns.valueIterator();
-            while (it.next()) |sub| {
-                sub.*.connector.deinit();
-                self.allocator.destroy(sub.*);
-            }
+            while (it.next()) |conn| conn.*.deinit();
             self.sub_conns.deinit(self.allocator);
             self.allocator.destroy(self);
         }
@@ -172,7 +155,10 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     if (self.closed) return;
                     if (err == error.SessionInvalid) {
                         std.log.warn("session invalid, clearing stored session", .{});
-                        self.opts.storage.save(io, std.mem.zeroes(storage_mod.SessionData)) catch |e|
+                        const dc_id = if (self.primary) |p| p.dc_id else 0;
+                        var blank = std.mem.zeroes(storage_mod.SessionData);
+                        blank.dc_id = dc_id;
+                        self.opts.storage.save(io, blank) catch |e|
                             std.log.warn("failed to clear session: {}", .{e});
                         self.user_authorized = false;
                     }
@@ -263,56 +249,45 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             {
                 try self.sub_conns_mu.lock(io2);
                 defer self.sub_conns_mu.unlock(io2);
-                if (self.sub_conns.get(dc_id)) |sub| return sub.connector;
+                if (self.sub_conns.get(dc_id)) |conn| return conn;
             }
 
             // Slow path: create outside the lock so blocking ops don't stall other coroutines.
             const dc = self.findDc(dc_id) orelse return error.DcNotFound;
-            const sub = try self.allocator.create(SubConn);
-            errdefer self.allocator.destroy(sub);
-            sub.* = .{
-                .connector = undefined,
-                .file_storage = if (self.opts.session_path) |p|
-                    storage_mod.MultiDcFileStorage.init(p, dc_id)
-                else
-                    null,
-            };
-            sub.connector = try Connector.connect(io2, self.allocator, .{
+            const conn = try Connector.connect(io2, self.allocator, .{
                 .dc = dc,
                 .transport = .tcp_abridged,
-                .session_storage = sub.sessionStorage(),
+                .session_storage = self.opts.storage,
                 .api_id = self.opts.api_id,
                 .api_hash = self.opts.api_hash,
             });
-            errdefer sub.connector.deinit();
+            errdefer conn.deinit();
             // run() before transferAuth: loops must be running so mtp.call can complete.
-            try sub.connector.run(io2, sub_conn_noop_handler);
+            try conn.run(io2, sub_conn_noop_handler);
             errdefer {
-                sub.connector.close(io2);
-                sub.connector.join(io2);
+                conn.close(io2);
+                conn.join(io2);
             }
-            try self.transferAuth(io2, sub.connector, dc_id);
+            try self.transferAuth(io2, conn, dc_id);
 
             // Insert under lock. Handle the race where another coroutine beat us here.
             try self.sub_conns_mu.lock(io2);
             const gop = self.sub_conns.getOrPut(self.allocator, dc_id) catch |err| {
                 self.sub_conns_mu.unlock(io2);
-                return err; // errdefers clean up our sub
+                return err;
             };
             if (gop.found_existing) {
                 // Another coroutine won the race; discard ours.
-                const existing = gop.value_ptr.*.connector;
+                const existing = gop.value_ptr.*;
                 self.sub_conns_mu.unlock(io2);
-                sub.connector.close(io2);
-                sub.connector.join(io2);
-                sub.connector.deinit();
-                self.allocator.destroy(sub);
+                conn.close(io2);
+                conn.join(io2);
+                conn.deinit();
                 return existing;
             }
-            gop.value_ptr.* = sub;
-            const connector = sub.connector;
+            gop.value_ptr.* = conn;
             self.sub_conns_mu.unlock(io2);
-            return connector;
+            return conn;
         }
 
         fn removeSubConn(self: *Self, io2: Io, dc_id: u8) void {
@@ -323,10 +298,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             };
             self.sub_conns_mu.unlock(io2);
             // Join before deinit to avoid use-after-free in the running loops.
-            kv.value.connector.close(io2);
-            kv.value.connector.join(io2);
-            kv.value.connector.deinit();
-            self.allocator.destroy(kv.value);
+            kv.value.close(io2);
+            kv.value.join(io2);
+            kv.value.deinit();
         }
 
         fn callRawOnDc(self: *Self, io2: Io, dc_id: u8, bytes: []const u8) ![]u8 {
@@ -356,7 +330,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         fn runOnce(self: *Self, io: Io) !void {
             if (!self.dc_resolved) {
-                if (try self.opts.storage.load(io, self.allocator)) |saved| {
+                if (try self.opts.storage.load(io, self.allocator, self.opts.dc.id)) |saved| {
                     if (connector_mod.findDc(saved.dc_id, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
                 }
                 self.dc_resolved = true;
@@ -378,10 +352,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 self.primary = null;
                 var sub_it = self.sub_conns.valueIterator();
                 while (sub_it.next()) |sub| {
-                    sub.*.connector.close(io);
-                    sub.*.connector.join(io);
-                    sub.*.connector.deinit();
-                    self.allocator.destroy(sub.*);
+                    sub.*.close(io);
+                    sub.*.join(io);
+                    sub.*.deinit();
                 }
                 self.sub_conns.clearRetainingCapacity();
             }
