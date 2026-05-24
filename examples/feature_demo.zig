@@ -284,6 +284,6 @@ pub fn main() !void {
 }
 
 fn usage() noreturn {
-    std.log.err("usage: TZ_API_ID=<id> TZ_API_HASH=<hash> TZ_BOT_TOKEN=<token> ./pill", .{});
+    std.log.err("usage: TZ_API_ID=<id> TZ_API_HASH=<hash> TZ_BOT_TOKEN=<token> ./feature_demo", .{});
     std.process.exit(1);
 }
