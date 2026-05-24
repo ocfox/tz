@@ -97,6 +97,57 @@ pub fn sendDocument(ctx: Context, update: types.UpdateNewMessage, data: []const 
     });
 }
 
+pub const CallbackAnswerOptions = struct {
+    text: ?[]const u8 = null,
+    alert: bool = false,
+    url: ?[]const u8 = null,
+    cache_time: i32 = 0,
+};
+
+/// Answer a button callback query (UpdateBotCallbackQuery).
+pub fn answerCallbackQuery(ctx: Context, update: types.UpdateBotCallbackQuery, opts: CallbackAnswerOptions) !void {
+    _ = try ctx.call(functions.messages.SetBotCallbackAnswer{
+        .flags = .{},
+        .alert = if (opts.alert) .some({}) else .none,
+        .query_id = update.query_id,
+        .message = if (opts.text) |t| .some(t) else .none,
+        .url = if (opts.url) |u| .some(u) else .none,
+        .cache_time = opts.cache_time,
+    });
+}
+
+/// Answer a callback query from an inline message (UpdateInlineBotCallbackQuery).
+pub fn answerInlineCallbackQuery(ctx: Context, update: types.UpdateInlineBotCallbackQuery, opts: CallbackAnswerOptions) !void {
+    _ = try ctx.call(functions.messages.SetBotCallbackAnswer{
+        .flags = .{},
+        .alert = if (opts.alert) .some({}) else .none,
+        .query_id = update.query_id,
+        .message = if (opts.text) |t| .some(t) else .none,
+        .url = if (opts.url) |u| .some(u) else .none,
+        .cache_time = opts.cache_time,
+    });
+}
+
+pub const InlineQueryOptions = struct {
+    cache_time: i32 = 300,
+    is_gallery: bool = false,
+    is_private: bool = false,
+    next_offset: ?[]const u8 = null,
+};
+
+/// Answer an inline query (UpdateBotInlineQuery). Results are constructed by the caller.
+pub fn answerInlineQuery(ctx: Context, update: types.UpdateBotInlineQuery, results: []const types.InputBotInlineResult, opts: InlineQueryOptions) !void {
+    _ = try ctx.call(functions.messages.SetInlineBotResults{
+        .flags = .{},
+        .gallery = if (opts.is_gallery) .some({}) else .none,
+        .private = if (opts.is_private) .some({}) else .none,
+        .query_id = update.query_id,
+        .results = @constCast(results),
+        .cache_time = opts.cache_time,
+        .next_offset = if (opts.next_offset) |o| .some(o) else .none,
+    });
+}
+
 pub fn peerFromMessage(entities: Entities, msg: types.Message_) ?types.InputPeer {
     return switch (msg.peer_id) {
         .PeerUser => |p| .{ .InputPeerUser = .{
