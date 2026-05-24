@@ -15,7 +15,7 @@ Echo bot binary: ~518 KB (`ReleaseSmall`) / ~780KB (`ReleaseSmall`,statically li
 - Comptime handler dispatch — register handlers per update type, zero runtime overhead
 - `FileStorage` / `MemoryStorage` for session persistence
 - Bot and user account auth
-- File upload (`tz.upload`) with automatic cross-DC routing
+- File upload (`tz.upload`) and download (`tz.download`) with automatic cross-DC routing
 
 ## Usage
 

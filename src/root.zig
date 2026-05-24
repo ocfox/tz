@@ -41,3 +41,6 @@ pub const nextRandomId = client_mod.nextRandomId;
 pub const helpers = @import("helpers.zig");
 pub const upload = @import("upload.zig").upload;
 pub const UploadOptions = @import("upload.zig").UploadOptions;
+pub const download = @import("download.zig").download;
+pub const documentLocation = @import("download.zig").documentLocation;
+pub const photoLocation = @import("download.zig").photoLocation;
