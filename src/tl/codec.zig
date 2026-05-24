@@ -149,7 +149,16 @@ fn encodeStructBodyWriter(comptime T: type, value: T, w: *std.Io.Writer) !void {
                 }
             }
         } else {
-            try encodeWriter(field.type, fv, w);
+            if (comptime std.mem.eql(u8, field.name, "random_id") and field.type == i64) {
+                try encodeWriter(i64, if (fv == 0) blk: {
+                    // SAFETY: getrandom fills all 8 bytes before entropy is read
+                    var entropy: i64 = undefined;
+                    _ = std.os.linux.getrandom(@as([*]u8, @ptrCast(&entropy)), 8, 0);
+                    break :blk entropy;
+                } else fv, w);
+            } else {
+                try encodeWriter(field.type, fv, w);
+            }
         }
     }
 }
@@ -273,7 +282,16 @@ fn encodeStructBody(comptime T: type, value: T, buf: *std.ArrayListUnmanaged(u8)
                 }
             }
         } else {
-            try encodeInto(fv, buf, allocator);
+            if (comptime std.mem.eql(u8, field.name, "random_id") and field.type == i64) {
+                try encodeInto(if (fv == 0) blk: {
+                    // SAFETY: getrandom fills all 8 bytes before entropy is read
+                    var entropy: i64 = undefined;
+                    _ = std.os.linux.getrandom(@as([*]u8, @ptrCast(&entropy)), 8, 0);
+                    break :blk entropy;
+                } else fv, buf, allocator);
+            } else {
+                try encodeInto(fv, buf, allocator);
+            }
         }
     }
 }

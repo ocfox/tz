@@ -8,7 +8,6 @@ const download_mod = @import("download.zig");
 pub const Context = client_mod.Context;
 pub const Entities = client_mod.Entities;
 
-pub const nextRandomId = client_mod.nextRandomId;
 pub const upload = upload_mod.upload;
 pub const UploadOptions = upload_mod.UploadOptions;
 pub const download = download_mod.download;
@@ -41,7 +40,6 @@ pub fn reply(
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
             .reply_to_msg_id = id,
         } }) else .none,
-        .random_id = client_mod.nextRandomId(),
     });
 }
 
@@ -66,7 +64,6 @@ pub fn sendPhoto(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         .peer = peer,
         .media = .{ .InputMediaUploadedPhoto = .{ .file = input_file } },
         .message = opts.caption,
-        .random_id = client_mod.nextRandomId(),
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
             .reply_to_msg_id = id,
         } }) else .none,
@@ -94,7 +91,6 @@ pub fn sendDocument(ctx: Context, update: types.UpdateNewMessage, data: []const 
             .attributes = &attrs,
         } },
         .message = opts.caption,
-        .random_id = client_mod.nextRandomId(),
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
             .reply_to_msg_id = id,
         } }) else .none,
@@ -135,7 +131,6 @@ pub fn sendAudio(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
             .attributes = &attrs,
         } },
         .message = opts.caption,
-        .random_id = client_mod.nextRandomId(),
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
             .reply_to_msg_id = id,
         } }) else .none,
@@ -178,7 +173,6 @@ pub fn sendVideo(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
             .attributes = &attrs,
         } },
         .message = opts.caption,
-        .random_id = client_mod.nextRandomId(),
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
             .reply_to_msg_id = id,
         } }) else .none,
@@ -211,7 +205,7 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
         if (input_file == .InputFile) checksums[i] = input_file.InputFile.md5_checksum;
         media_items[i] = .{
             .media = .{ .InputMediaUploadedPhoto = .{ .file = input_file } },
-            .random_id = client_mod.nextRandomId(),
+
             .message = item.caption,
         };
     }
@@ -229,7 +223,7 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
 pub fn forwardMessages(ctx: Context, from_peer: types.InputPeer, to_peer: types.InputPeer, ids: []i32) !void {
     const random_ids = try ctx.allocator.alloc(i64, ids.len);
     defer ctx.allocator.free(random_ids);
-    for (random_ids) |*r| r.* = client_mod.nextRandomId();
+    for (random_ids) |*r| r.* = std.crypto.random.int(i64);
     _ = try ctx.call(functions.messages.ForwardMessages{
         .from_peer = from_peer,
         .id = ids,
@@ -380,7 +374,6 @@ pub fn sendVoice(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
             .attributes = &attrs,
         } },
         .message = opts.caption,
-        .random_id = client_mod.nextRandomId(),
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
             .reply_to_msg_id = id,
         } }) else .none,

@@ -41,7 +41,6 @@ fn onCommand(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
         _ = try ctx.call(f.messages.SendMessage{
             .peer = peer,
             .message = text,
-            .random_id = tz.helpers.nextRandomId(),
         });
     } else if (std.mem.eql(u8, msg.message, "/delete")) {
         var ids = [_]i32{msg.id};
@@ -65,7 +64,6 @@ fn onEcho(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
         .reply_to = .some(.{ .InputReplyToMessage = .{
             .reply_to_msg_id = msg.id,
         } }),
-        .random_id = tz.helpers.nextRandomId(),
     });
 }
 

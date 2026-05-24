@@ -138,7 +138,12 @@ pub fn emitTypes(
             } else {
                 const fname = names.fieldName(p.name, &field_buf);
                 const ftype = try tlTypeToZig(p.type_name, union_types, single_types, tmp, false, is_rec);
-                try buf.print(allocator, "    {s}: {s},\n", .{ fname, ftype });
+                const is_random_id = std.mem.eql(u8, p.name, "random_id") and std.mem.eql(u8, p.type_name, "long");
+                if (is_random_id) {
+                    try buf.print(allocator, "    {s}: {s} = 0,\n", .{ fname, ftype });
+                } else {
+                    try buf.print(allocator, "    {s}: {s},\n", .{ fname, ftype });
+                }
             }
         }
         try buf.appendSlice(allocator, "};\n\n");
@@ -258,7 +263,12 @@ pub fn emitFunctions(
                 } else {
                     const fname = names.fieldName(p.name, &field_buf);
                     const ftype = try tlTypeToZig(p.type_name, union_types, single_types, tmp, true, false);
-                    try buf.print(allocator, "{s}    {s}: {s},\n", .{ indent, fname, ftype });
+                    const is_random_id = std.mem.eql(u8, p.name, "random_id") and std.mem.eql(u8, p.type_name, "long");
+                    if (is_random_id) {
+                        try buf.print(allocator, "{s}    {s}: {s} = 0,\n", .{ indent, fname, ftype });
+                    } else {
+                        try buf.print(allocator, "{s}    {s}: {s},\n", .{ indent, fname, ftype });
+                    }
                 }
             }
 
