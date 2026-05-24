@@ -184,6 +184,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             defer {
                 c.close(io);
                 c.join(io);
+                c.saveSession(io);
                 c.deinit();
                 self.primary = null;
             }

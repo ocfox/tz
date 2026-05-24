@@ -75,6 +75,8 @@ pub const Connector = struct {
     initialized: bool = false,
     api_id: i32,
     api_hash: []const u8,
+    session_storage: storage_mod.SessionStorage,
+    dc_id: u8,
 
     pub fn connect(io: Io, allocator: Allocator, opts: ConnectOptions) !*Connector {
         const stream = try opts.dc.addr.connect(io, .{ .mode = .stream });
@@ -129,6 +131,8 @@ pub const Connector = struct {
             .update_handler = undefined,
             .api_id = opts.api_id,
             .api_hash = opts.api_hash,
+            .session_storage = opts.session_storage,
+            .dc_id = opts.dc.id,
         };
         self.mtp = try MtpImpl.init(allocator, transport, session, &self.mtp_handler);
         return self;
@@ -154,6 +158,17 @@ pub const Connector = struct {
     pub fn join(self: *Connector, io: Io) void {
         self.mtp.join();
         self.update_group.cancel(io);
+    }
+
+    /// Persist current session (with latest server_salt) back to storage.
+    pub fn saveSession(self: *Connector, io: Io) void {
+        const s = &self.mtp.session;
+        self.session_storage.save(io, .{
+            .auth_key = s.auth_key,
+            .auth_key_id = s.auth_key_id,
+            .server_salt = s.server_salt,
+            .dc_id = self.dc_id,
+        }) catch |err| std.log.warn("failed to save session: {}", .{err});
     }
 
     /// Send raw TL bytes, return raw response bytes (caller frees).
