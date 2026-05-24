@@ -20,10 +20,7 @@ const handlers = &.{
 };
 
 pub fn main(init: std.process.Init.Minimal) !void {
-    // A debug allocator catches leaks and double-frees when the program exits.
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.heap.smp_allocator;
 
     // std.Io.Threaded gives us an IO runtime backed by a thread pool.
     // All network IO and timers go through this.

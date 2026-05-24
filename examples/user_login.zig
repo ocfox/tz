@@ -78,9 +78,7 @@ fn signIn2FA(client: *Client, io: std.Io) !void {
 }
 
 pub fn main(init: std.process.Init.Minimal) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.heap.smp_allocator;
 
     var threaded = std.Io.Threaded.init(allocator, .{});
     defer threaded.deinit();

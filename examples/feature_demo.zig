@@ -304,9 +304,7 @@ const handlers = &.{
 pub fn main(init: std.process.Init.Minimal) !void {
     g_environ = init.environ;
 
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.heap.smp_allocator;
 
     var threaded = std.Io.Threaded.init(allocator, .{});
     defer threaded.deinit();
