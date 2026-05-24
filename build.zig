@@ -59,6 +59,14 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
+    const docs_step = b.step("docs", "Generate documentation");
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = lib.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    docs_step.dependOn(&install_docs.step);
+
     // tests
     const test_step = b.step("test", "Run tests");
 
