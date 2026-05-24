@@ -59,13 +59,13 @@ pub fn photoLocation(photo: types.Photo) ?types.InputFileLocation {
         switch (ps) {
             .PhotoSize => |s| if (s.size > best_size) {
                 best_size = s.size;
-                best_type = s.@"type";
+                best_type = s.type;
             },
             .PhotoSizeProgressive => |s| {
                 const last = if (s.sizes.len > 0) s.sizes[s.sizes.len - 1] else continue;
                 if (last > best_size) {
                     best_size = last;
-                    best_type = s.@"type";
+                    best_type = s.type;
                 }
             },
             else => {},

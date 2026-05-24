@@ -154,7 +154,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     if (self.closed) return;
                     if (err == error.SessionInvalid) {
                         std.log.warn("session invalid, clearing stored session", .{});
-                        self.opts.storage.save(io, std.mem.zeroes(storage_mod.SessionData)) catch {};
+                        self.opts.storage.save(io, std.mem.zeroes(storage_mod.SessionData)) catch |e|
+                            std.log.warn("failed to clear session: {}", .{e});
                         self.user_authorized = false;
                     }
                     std.log.warn("disconnected: {}, reconnecting in {}ms", .{ err, backoff_ms });
@@ -248,6 +249,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             if (!gop.found_existing) {
                 const sub = try self.allocator.create(SubConn);
                 errdefer self.allocator.destroy(sub);
+                // SAFETY: connector is assigned two lines below before sub is used
                 sub.* = .{ .connector = undefined };
                 const dc = self.findDc(dc_id) orelse return error.DcNotFound;
                 sub.connector = try Connector.connect(io2, self.allocator, .{
