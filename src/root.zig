@@ -39,3 +39,5 @@ pub const Entities = client_mod.Entities;
 pub const handler = client_mod.handler;
 pub const nextRandomId = client_mod.nextRandomId;
 pub const helpers = @import("helpers.zig");
+pub const upload = @import("upload.zig").upload;
+pub const UploadOptions = @import("upload.zig").UploadOptions;

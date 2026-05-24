@@ -13,6 +13,19 @@ pub const HandlerEntry = struct {
     dispatchFn: *const fn (ctx: Context, update: types.Update) anyerror!void,
 };
 
+const SubConn = struct {
+    connector: *Connector,
+    storage: storage_mod.MemoryStorage = .{},
+};
+
+var sub_conn_dummy: u8 = 0;
+const sub_conn_noop_handler = connector_mod.UpdateHandler{
+    .ptr = &sub_conn_dummy,
+    .vtable = &.{ .handle = struct {
+        fn h(_: *anyopaque, _: Io, _: []const u8) void {}
+    }.h },
+};
+
 /// Build a HandlerEntry for a typed update.
 /// cb must be: fn (ctx: Context, update: UpdateType) anyerror!void
 pub fn handler(
@@ -41,9 +54,9 @@ pub const Context = struct {
     io: Io,
     allocator: Allocator,
     entities: Entities,
-    /// callFn encodes the full RPC round-trip including error handling.
-    /// Returns an owned slice (caller must free); errors include RpcError, DcMigrate, etc.
     callFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
+    /// Like callFn but routes FILE_MIGRATE to a sub-connection automatically.
+    callFileFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
 
     /// Send a typed TL request, return the decoded response.
     pub fn call(self: Context, request: anytype) !@TypeOf(request).Response {
@@ -51,6 +64,17 @@ pub const Context = struct {
         var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
         const bytes = try codec.encodeAlloc(request, fba.allocator());
         const raw = try self.callFn(self.client, self.io, bytes);
+        defer self.allocator.free(raw);
+        var r: std.Io.Reader = .fixed(raw);
+        return codec.decode(@TypeOf(request).Response, &r, self.allocator);
+    }
+
+    /// Like call but for upload RPCs: automatically follows FILE_MIGRATE to the file DC.
+    /// Uses heap allocation for encoding (upload parts can be large).
+    pub fn callFile(self: Context, request: anytype) !@TypeOf(request).Response {
+        const bytes = try codec.encodeAlloc(request, self.allocator);
+        defer self.allocator.free(bytes);
+        const raw = try self.callFileFn(self.client, self.io, bytes);
         defer self.allocator.free(raw);
         var r: std.Io.Reader = .fixed(raw);
         return codec.decode(@TypeOf(request).Response, &r, self.allocator);
@@ -100,6 +124,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         bot_id: ?i64 = null,
         user_authorized: bool = false,
         dc_list: ?[]connector_mod.DC = null,
+        sub_conns: std.AutoHashMapUnmanaged(u8, *SubConn) = .empty,
+        last_file_dc: ?u8 = null,
 
         pub fn init(allocator: Allocator, opts: ClientOptions) !*Self {
             initRandomCounter();
@@ -110,6 +136,13 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         pub fn deinit(self: *Self) void {
             if (self.dc_list) |list| self.allocator.free(list);
+            // Sub-conns should have been closed in runOnce's defer; clean up any stragglers.
+            var it = self.sub_conns.valueIterator();
+            while (it.next()) |sub| {
+                sub.*.connector.deinit();
+                self.allocator.destroy(sub.*);
+            }
+            self.sub_conns.deinit(self.allocator);
             self.allocator.destroy(self);
         }
 
@@ -174,6 +207,78 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             return raw;
         }
 
+        fn callFileImpl(ptr: *anyopaque, io2: Io, bytes: []const u8) anyerror![]u8 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            // Route directly to known file DC on subsequent parts.
+            if (self.last_file_dc) |dc_id| {
+                return self.callRawOnDc(io2, dc_id, bytes);
+            }
+            const raw = try self.callRaw(io2, bytes);
+            if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid) {
+                const code = std.mem.readInt(i32, raw[4..8], .little);
+                if (code == 303) {
+                    if (parseMigrateDc(raw)) |dc_id| {
+                        self.allocator.free(raw);
+                        self.last_file_dc = dc_id;
+                        return self.callRawOnDc(io2, dc_id, bytes);
+                    }
+                }
+                defer self.allocator.free(raw);
+                try self.handleRpcError(io2, raw);
+                return error.RpcError;
+            }
+            return raw;
+        }
+
+        fn callViaConnector(self: *Self, io2: Io, c: *Connector, bytes: []const u8) ![]u8 {
+            if (!c.isInitialized()) {
+                c.setInitialized();
+                const wrapped = try wrapInit(self.allocator, self.opts.api_id, bytes);
+                defer self.allocator.free(wrapped);
+                return c.call(io2, wrapped);
+            }
+            return c.call(io2, bytes);
+        }
+
+        fn callRawOnDc(self: *Self, io2: Io, dc_id: u8, bytes: []const u8) ![]u8 {
+            const gop = try self.sub_conns.getOrPut(self.allocator, dc_id);
+            if (!gop.found_existing) {
+                const sub = try self.allocator.create(SubConn);
+                errdefer self.allocator.destroy(sub);
+                sub.* = .{ .connector = undefined };
+                const dc = self.findDc(dc_id) orelse return error.DcNotFound;
+                sub.connector = try Connector.connect(io2, self.allocator, .{
+                    .dc = dc,
+                    .transport = .tcp_abridged,
+                    .session_storage = sub.storage.storage(),
+                    .api_id = self.opts.api_id,
+                    .api_hash = self.opts.api_hash,
+                });
+                errdefer sub.connector.deinit();
+                try self.transferAuth(io2, sub.connector, dc_id);
+                try sub.connector.run(io2, sub_conn_noop_handler);
+                gop.value_ptr.* = sub;
+            }
+            return self.callViaConnector(io2, gop.value_ptr.*.connector, bytes);
+        }
+
+        fn transferAuth(self: *Self, io2: Io, sub: *Connector, dc_id: u8) !void {
+            const exported = try self.call(io2, functions.auth.ExportAuthorization{
+                .dc_id = @intCast(dc_id),
+            });
+            defer self.allocator.free(exported.bytes);
+            var fba_buf: [512]u8 = undefined;
+            var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
+            const import_bytes = try codec.encodeAlloc(functions.auth.ImportAuthorization{
+                .id = exported.id,
+                .bytes = exported.bytes,
+            }, fba.allocator());
+            const raw = try self.callViaConnector(io2, sub, import_bytes);
+            defer self.allocator.free(raw);
+            if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid)
+                return error.AuthTransferFailed;
+        }
+
         fn runOnce(self: *Self, io: Io) !void {
             if (!self.dc_resolved) {
                 if (try self.opts.storage.load(io, self.allocator)) |saved| {
@@ -196,6 +301,15 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 c.saveSession(io);
                 c.deinit();
                 self.primary = null;
+                var sub_it = self.sub_conns.valueIterator();
+                while (sub_it.next()) |sub| {
+                    sub.*.connector.close(io);
+                    sub.*.connector.join(io);
+                    sub.*.connector.deinit();
+                    self.allocator.destroy(sub.*);
+                }
+                self.sub_conns.clearRetainingCapacity();
+                self.last_file_dc = null;
             }
             self.primary = c;
 
@@ -274,14 +388,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         }
 
         fn callRaw(self: *Self, io: Io, bytes: []const u8) ![]u8 {
-            const c = self.primary orelse return error.NotConnected;
-            if (!c.isInitialized()) {
-                c.setInitialized();
-                const wrapped = try wrapInit(self.allocator, self.opts.api_id, bytes);
-                defer self.allocator.free(wrapped);
-                return c.call(io, wrapped);
-            }
-            return c.call(io, bytes);
+            return self.callViaConnector(io, self.primary orelse return error.NotConnected, bytes);
         }
 
         fn handleRpcError(self: *Self, io: Io, raw: []const u8) !void {
@@ -346,6 +453,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .allocator = self.allocator,
                 .entities = entities,
                 .callFn = callImpl,
+                .callFileFn = callFileImpl,
             };
 
             for (upd.updates) |u| {
