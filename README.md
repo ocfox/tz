@@ -75,7 +75,7 @@ See [examples/](examples/) for complete runnable examples.
 ## Dependency
 
 ```sh
-zig fetch --save https://github.com/ocfox/tz/archive/refs/tags/v0.0.2.tar.gz
+zig fetch --save https://github.com/ocfox/tz/archive/master.tar.gz
 ```
 
 Then in `build.zig`:
