@@ -198,23 +198,27 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         fn callImpl(ptr: *anyopaque, io2: Io, bytes: []const u8) anyerror![]u8 {
             const self: *Self = @ptrCast(@alignCast(ptr));
-            const raw = try self.callRaw(io2, bytes);
-            if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid) {
+            for (0..4) |_| {
+                const raw = try self.callRaw(io2, bytes);
+                if (raw.len < 4 or std.mem.readInt(u32, raw[0..4], .little) != types.RpcError.cid)
+                    return raw;
                 defer self.allocator.free(raw);
+                // handleRpcError returns void on FLOOD_WAIT (slept, should retry), error otherwise.
                 try self.handleRpcError(io2, raw);
-                return error.RpcError;
             }
-            return raw;
+            return error.RpcError;
         }
 
         fn callFileImpl(ptr: *anyopaque, io2: Io, bytes: []const u8) anyerror![]u8 {
             const self: *Self = @ptrCast(@alignCast(ptr));
-            // Route directly to known file DC on subsequent parts.
-            if (self.last_file_dc) |dc_id| {
-                return self.callRawOnDc(io2, dc_id, bytes);
-            }
-            const raw = try self.callRaw(io2, bytes);
-            if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid) {
+            for (0..4) |_| {
+                // Route directly to known file DC on subsequent parts.
+                if (self.last_file_dc) |dc_id| {
+                    return self.callRawOnDc(io2, dc_id, bytes);
+                }
+                const raw = try self.callRaw(io2, bytes);
+                if (raw.len < 4 or std.mem.readInt(u32, raw[0..4], .little) != types.RpcError.cid)
+                    return raw;
                 const code = std.mem.readInt(i32, raw[4..8], .little);
                 if (code == 303) {
                     if (parseMigrateDc(raw)) |dc_id| {
@@ -225,9 +229,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 }
                 defer self.allocator.free(raw);
                 try self.handleRpcError(io2, raw);
-                return error.RpcError;
             }
-            return raw;
+            return error.RpcError;
         }
 
         fn callViaConnector(self: *Self, io2: Io, c: *Connector, bytes: []const u8) ![]u8 {
@@ -402,6 +405,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     const secs = std.fmt.parseInt(u64, msg[idx + "FLOOD_WAIT_".len ..], 10) catch 60;
                     std.log.warn("flood wait: sleeping {}s", .{secs});
                     std.Io.sleep(io, std.Io.Duration.fromSeconds(@intCast(secs)), .awake) catch |err| std.log.debug("sleep: {}", .{err});
+                    return; // caller should retry
                 }
             }
             if (code == 303) {
