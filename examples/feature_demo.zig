@@ -52,7 +52,7 @@ fn onHelp(ctx: h.Context, update: tg.UpdateNewMessage) !void {
     try ft.code("/info");
     try ft.plain(" your user info\n");
     try ft.code("/react");
-    try ft.plain(" add ♥️ (reply to msg)\n");
+    try ft.plain(" add ❤ (reply to msg)\n");
     try ft.code("/unreact");
     try ft.plain(" clear reactions (reply to msg)\n");
     try ft.code("/pin");
@@ -178,7 +178,7 @@ fn onInfo(ctx: h.Context, update: tg.UpdateNewMessage) !void {
 fn onReact(ctx: h.Context, update: tg.UpdateNewMessage) !void {
     const mp = msgPeer(ctx, update) orelse return;
     const target_id = replyMsgId(mp.msg) orelse mp.msg.id;
-    try h.addReaction(ctx, mp.peer, target_id, "♥️");
+    try h.addReaction(ctx, mp.peer, target_id, "❤");
 }
 
 fn onUnreact(ctx: h.Context, update: tg.UpdateNewMessage) !void {

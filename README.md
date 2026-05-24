@@ -94,7 +94,7 @@ try tz.helpers.forwardMessages(ctx, from_peer, to_peer, &[_]i32{msg.id});
 try tz.helpers.pinMessage(ctx, peer, msg.id, .{});
 
 // React
-try tz.helpers.addReaction(ctx, peer, msg.id, "♥️");
+try tz.helpers.addReaction(ctx, peer, msg.id, "❤");
 try tz.helpers.removeReaction(ctx, peer, msg.id);
 
 // Formatted text with MessageEntity
