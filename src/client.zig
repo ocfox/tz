@@ -79,6 +79,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         closed: bool = false,
         dc_resolved: bool = false,
         bot_id: ?i64 = null,
+        user_authorized: bool = false,
         dc_list: ?[]connector_mod.DC = null,
 
         pub fn init(allocator: Allocator, opts: ClientOptions) !*Self {
@@ -99,6 +100,11 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             while (!self.closed) {
                 self.runOnce(io) catch |err| {
                     if (self.closed) return;
+                    if (err == error.SessionInvalid) {
+                        std.log.warn("session invalid, clearing stored session", .{});
+                        self.opts.storage.save(io, std.mem.zeroes(storage_mod.SessionData)) catch {};
+                        self.user_authorized = false;
+                    }
                     std.log.warn("disconnected: {}, reconnecting in {}ms", .{ err, backoff_ms });
                     std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(backoff_ms)), .awake) catch |e| std.log.debug("sleep: {}", .{e});
                     backoff_ms = @min(backoff_ms * 5, 10_000);
@@ -202,7 +208,10 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     std.log.info("bot authenticated", .{});
                 }
             } else if (self.opts.auth_fn) |f| {
-                try f(self, io);
+                if (!self.user_authorized) {
+                    try f(self, io);
+                    self.user_authorized = true;
+                }
             }
             self.fetchDcList(io) catch |err|
                 std.log.warn("failed to fetch DC list: {}", .{err});
@@ -284,6 +293,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     return error.DcMigrate;
                 }
             }
+            if (code == 401) return error.SessionInvalid;
             if (std.mem.eql(u8, msg, "SESSION_PASSWORD_NEEDED")) return error.SessionPasswordNeeded;
             return error.RpcError;
         }

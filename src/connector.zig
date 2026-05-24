@@ -87,7 +87,7 @@ pub const Connector = struct {
 
         const auth_key_result = blk: {
             if (try opts.session_storage.load(io, allocator)) |saved| {
-                if (saved.dc_id == opts.dc.id) {
+                if (saved.dc_id != 0 and saved.dc_id == opts.dc.id) {
                     std.log.info("loaded existing session (dc={})", .{saved.dc_id});
                     break :blk auth_key_mod.AuthKeyResult{
                         .auth_key = saved.auth_key,
@@ -96,7 +96,9 @@ pub const Connector = struct {
                         .time_offset = 0,
                     };
                 }
-                std.log.info("session dc={} != target dc={}, re-doing DH", .{ saved.dc_id, opts.dc.id });
+                if (saved.dc_id != 0) {
+                    std.log.info("session dc={} != target dc={}, re-doing DH", .{ saved.dc_id, opts.dc.id });
+                }
             }
             std.log.info("performing DH key exchange", .{});
             const result = try auth_key_mod.perform(&transport, io, allocator);
