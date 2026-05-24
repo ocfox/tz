@@ -90,6 +90,160 @@ pub fn sendDocument(ctx: Context, update: types.UpdateNewMessage, data: []const 
     });
 }
 
+pub const AudioOptions = struct {
+    caption: []const u8 = "",
+    reply_to: ?i32 = null,
+    duration: i32 = 0,
+    title: ?[]const u8 = null,
+    performer: ?[]const u8 = null,
+    name: []const u8 = "audio",
+};
+
+/// Upload raw bytes as an audio file and send it to the same chat as `update`.
+pub fn sendAudio(ctx: Context, update: types.UpdateNewMessage, data: []const u8, mime_type: []const u8, opts: AudioOptions) !void {
+    const msg = switch (update.message) {
+        .Message => |m| m,
+        else => return,
+    };
+    const peer = peerFromMessage(ctx.entities, msg) orelse return;
+    const input_file = try upload_mod.upload(ctx, data, .{ .name = opts.name });
+    defer switch (input_file) {
+        .InputFile => |f| ctx.allocator.free(f.md5_checksum),
+        .InputFileBig => {},
+    };
+    var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeAudio = .{
+        .duration = opts.duration,
+        .title = if (opts.title) |t| .some(t) else .none,
+        .performer = if (opts.performer) |p| .some(p) else .none,
+    } }};
+    _ = try ctx.call(functions.messages.SendMedia{
+        .peer = peer,
+        .media = .{ .InputMediaUploadedDocument = .{
+            .file = input_file,
+            .mime_type = mime_type,
+            .attributes = &attrs,
+        } },
+        .message = opts.caption,
+        .random_id = client_mod.nextRandomId(),
+        .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
+            .reply_to_msg_id = id,
+        } }) else .none,
+    });
+}
+
+pub const VideoOptions = struct {
+    caption: []const u8 = "",
+    reply_to: ?i32 = null,
+    duration: f64 = 0,
+    w: i32 = 0,
+    h: i32 = 0,
+    supports_streaming: bool = true,
+    name: []const u8 = "video",
+};
+
+/// Upload raw bytes as a video file and send it to the same chat as `update`.
+pub fn sendVideo(ctx: Context, update: types.UpdateNewMessage, data: []const u8, mime_type: []const u8, opts: VideoOptions) !void {
+    const msg = switch (update.message) {
+        .Message => |m| m,
+        else => return,
+    };
+    const peer = peerFromMessage(ctx.entities, msg) orelse return;
+    const input_file = try upload_mod.upload(ctx, data, .{ .name = opts.name });
+    defer switch (input_file) {
+        .InputFile => |f| ctx.allocator.free(f.md5_checksum),
+        .InputFileBig => {},
+    };
+    var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeVideo = .{
+        .supports_streaming = if (opts.supports_streaming) .some({}) else .none,
+        .duration = opts.duration,
+        .w = opts.w,
+        .h = opts.h,
+    } }};
+    _ = try ctx.call(functions.messages.SendMedia{
+        .peer = peer,
+        .media = .{ .InputMediaUploadedDocument = .{
+            .file = input_file,
+            .mime_type = mime_type,
+            .attributes = &attrs,
+        } },
+        .message = opts.caption,
+        .random_id = client_mod.nextRandomId(),
+        .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
+            .reply_to_msg_id = id,
+        } }) else .none,
+    });
+}
+
+pub const AlbumItem = struct {
+    data: []const u8,
+    caption: []const u8 = "",
+    name: []const u8 = "photo.jpg",
+};
+
+/// Upload and send multiple photos as an album (SendMultiMedia).
+pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const AlbumItem, opts: ReplyOptions) !void {
+    const msg = switch (update.message) {
+        .Message => |m| m,
+        else => return,
+    };
+    const peer = peerFromMessage(ctx.entities, msg) orelse return;
+
+    const media_items = try ctx.allocator.alloc(types.InputSingleMedia, items.len);
+    defer ctx.allocator.free(media_items);
+    const checksums = try ctx.allocator.alloc(?[]const u8, items.len);
+    defer ctx.allocator.free(checksums);
+    defer for (checksums) |c| if (c) |s| ctx.allocator.free(s);
+    @memset(checksums, null);
+
+    for (items, 0..) |item, i| {
+        const input_file = try upload_mod.upload(ctx, item.data, .{ .name = item.name });
+        if (input_file == .InputFile) checksums[i] = input_file.InputFile.md5_checksum;
+        media_items[i] = .{
+            .media = .{ .InputMediaUploadedPhoto = .{ .file = input_file } },
+            .random_id = client_mod.nextRandomId(),
+            .message = item.caption,
+        };
+    }
+
+    _ = try ctx.call(functions.messages.SendMultiMedia{
+        .peer = peer,
+        .multi_media = media_items,
+        .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
+            .reply_to_msg_id = id,
+        } }) else .none,
+    });
+}
+
+/// Forward messages from one peer to another.
+pub fn forwardMessages(ctx: Context, from_peer: types.InputPeer, to_peer: types.InputPeer, ids: []i32) !void {
+    const random_ids = try ctx.allocator.alloc(i64, ids.len);
+    defer ctx.allocator.free(random_ids);
+    for (random_ids) |*r| r.* = client_mod.nextRandomId();
+    _ = try ctx.call(functions.messages.ForwardMessages{
+        .from_peer = from_peer,
+        .id = ids,
+        .random_id = random_ids,
+        .to_peer = to_peer,
+    });
+}
+
+pub const PinOptions = struct {
+    silent: bool = false,
+    unpin: bool = false,
+    pm_oneside: bool = false,
+};
+
+/// Pin or unpin a message by peer + message id.
+pub fn pinMessage(ctx: Context, peer: types.InputPeer, msg_id: i32, opts: PinOptions) !void {
+    _ = try ctx.call(functions.messages.UpdatePinnedMessage{
+        .peer = peer,
+        .id = msg_id,
+        .silent = if (opts.silent) .some({}) else .none,
+        .unpin = if (opts.unpin) .some({}) else .none,
+        .pm_oneside = if (opts.pm_oneside) .some({}) else .none,
+    });
+}
+
 pub fn callbackButton(text: []const u8, data: []const u8) types.KeyboardButton {
     return .{ .KeyboardButtonCallback = .{ .text = text, .data = data } };
 }
