@@ -1,7 +1,5 @@
 //! user_login — demonstrates user account auth via auth_fn.
 //!
-//! Replace the constants below with real values to run.
-//!
 //! usage: TZ_API_ID=<id> TZ_API_HASH=<hash> zig build user-login
 
 const std = @import("std");
@@ -9,6 +7,8 @@ const tz = @import("tz");
 const tg = tz.types;
 const functions = @import("functions");
 
+// The constants below are left as-is on purpose. It's up to you to
+// implement how they are interactively provided—do it in your own style.
 const phone = "+12345678900";
 const code = "12345";
 const phone_code_hash = "abc123"; // returned by auth.SendCode
