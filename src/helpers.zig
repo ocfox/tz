@@ -3,9 +3,17 @@ const types = @import("types");
 const functions = @import("functions");
 const client_mod = @import("client.zig");
 const upload_mod = @import("upload.zig");
+const download_mod = @import("download.zig");
 
 pub const Context = client_mod.Context;
 pub const Entities = client_mod.Entities;
+
+pub const nextRandomId = client_mod.nextRandomId;
+pub const upload = upload_mod.upload;
+pub const UploadOptions = upload_mod.UploadOptions;
+pub const download = download_mod.download;
+pub const documentLocation = download_mod.documentLocation;
+pub const photoLocation = download_mod.photoLocation;
 
 pub const ReplyOptions = struct {
     reply_to: ?i32 = null,
