@@ -90,6 +90,38 @@ pub fn sendDocument(ctx: Context, update: types.UpdateNewMessage, data: []const 
     });
 }
 
+pub fn callbackButton(text: []const u8, data: []const u8) types.KeyboardButton {
+    return .{ .KeyboardButtonCallback = .{ .text = text, .data = data } };
+}
+
+pub fn urlButton(text: []const u8, url: []const u8) types.KeyboardButton {
+    return .{ .KeyboardButtonUrl = .{ .text = text, .url = url } };
+}
+
+pub fn inlineRow(buttons: []types.KeyboardButton) types.KeyboardButtonRow {
+    return .{ .buttons = buttons };
+}
+
+pub fn inlineKeyboard(rows: []types.KeyboardButtonRow) types.ReplyMarkup {
+    return .{ .ReplyInlineMarkup = .{ .rows = rows } };
+}
+
+pub const EditOptions = struct {
+    text: ?[]const u8 = null,
+    reply_markup: ?types.ReplyMarkup = null,
+};
+
+/// Edit a message by peer + message id.
+/// At least one of text or reply_markup must be set.
+pub fn editMessage(ctx: Context, peer: types.InputPeer, msg_id: i32, opts: EditOptions) !void {
+    _ = try ctx.call(functions.messages.EditMessage{
+        .peer = peer,
+        .id = msg_id,
+        .message = if (opts.text) |t| .some(t) else .none,
+        .reply_markup = if (opts.reply_markup) |m| .some(m) else .none,
+    });
+}
+
 pub const CallbackAnswerOptions = struct {
     text: ?[]const u8 = null,
     alert: bool = false,
@@ -136,6 +168,20 @@ pub fn answerInlineQuery(ctx: Context, update: types.UpdateBotInlineQuery, resul
         .cache_time = opts.cache_time,
         .next_offset = if (opts.next_offset) |o| .some(o) else .none,
     });
+}
+
+pub fn peerFromCallbackQuery(entities: Entities, update: types.UpdateBotCallbackQuery) ?types.InputPeer {
+    return switch (update.peer) {
+        .PeerUser => |p| .{ .InputPeerUser = .{
+            .user_id = p.user_id,
+            .access_hash = entities.accessHash(p.user_id) orelse return null,
+        } },
+        .PeerChat => |p| .{ .InputPeerChat = .{ .chat_id = p.chat_id } },
+        .PeerChannel => |p| .{ .InputPeerChannel = .{
+            .channel_id = p.channel_id,
+            .access_hash = entities.channelAccessHash(p.channel_id) orelse return null,
+        } },
+    };
 }
 
 pub fn peerFromMessage(entities: Entities, msg: types.Message_) ?types.InputPeer {
