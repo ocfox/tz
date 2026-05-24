@@ -109,7 +109,6 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    b.installArtifact(echo_bot);
     const run_echo_bot = b.addRunArtifact(echo_bot);
     if (b.args) |args| run_echo_bot.addArgs(args);
     b.step("echo-bot", "Run echo_bot example").dependOn(&run_echo_bot.step);
@@ -124,7 +123,6 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    b.installArtifact(any_call);
     const run_any_call = b.addRunArtifact(any_call);
     if (b.args) |args| run_any_call.addArgs(args);
     b.step("any-call", "Run any_call example").dependOn(&run_any_call.step);
@@ -142,10 +140,23 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    b.installArtifact(user_login);
     const run_user_login = b.addRunArtifact(user_login);
     if (b.args) |args| run_user_login.addArgs(args);
     b.step("user-login", "Run user_login example").dependOn(&run_user_login.step);
+
+    const feature_demo = b.addExecutable(.{
+        .name = "feature_demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/feature_demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "tz", .module = mod }},
+            .link_libc = true,
+        }),
+    });
+    const run_feature_demo = b.addRunArtifact(feature_demo);
+    if (b.args) |args| run_feature_demo.addArgs(args);
+    b.step("feature-demo", "Run feature_demo example").dependOn(&run_feature_demo.step);
 
     // update-schema
     const update_schema = b.step("update-schema", "Fetch latest TL schemas from tdesktop");
