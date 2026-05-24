@@ -39,7 +39,6 @@ fn onCommand(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
             user.first_name.value orelse "(none)",
         });
         _ = try ctx.call(f.messages.SendMessage{
-            .flags = .{},
             .peer = peer,
             .message = text,
             .random_id = tz.nextRandomId(),
@@ -47,7 +46,6 @@ fn onCommand(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
     } else if (std.mem.eql(u8, msg.message, "/delete")) {
         var ids = [_]i32{msg.id};
         _ = try ctx.call(f.messages.DeleteMessages{
-            .flags = .{},
             .id = &ids,
         });
     }
@@ -62,11 +60,9 @@ fn onEcho(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
 
     const peer = tz.helpers.peerFromMessage(ctx.entities, msg) orelse return;
     _ = try ctx.call(f.messages.SendMessage{
-        .flags = .{},
         .peer = peer,
         .message = msg.message,
         .reply_to = .some(.{ .InputReplyToMessage = .{
-            .flags = .{},
             .reply_to_msg_id = msg.id,
         } }),
         .random_id = tz.nextRandomId(),

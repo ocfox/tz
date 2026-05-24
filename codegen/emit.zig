@@ -123,7 +123,7 @@ pub fn emitTypes(
         for (ctor.params) |p| {
             if (p.is_flags) {
                 const ft = if (p.flags_index == 0) "tl.Flags" else "tl.Flags2";
-                try buf.print(allocator, "    {s}: {s},\n", .{ p.name, ft });
+                try buf.print(allocator, "    {s}: {s} = .{{}},\n", .{ p.name, ft });
             } else if (p.flag_bit) |bit| {
                 const fname = names.fieldName(p.name, &field_buf);
                 const ftype = try tlTypeToZig(p.type_name, union_types, single_types, tmp, false, is_rec);
@@ -247,7 +247,7 @@ pub fn emitFunctions(
 
             for (ctor.params) |p| {
                 if (p.is_flags) {
-                    try buf.print(allocator, "{s}    {s}: tl.Flags,\n", .{ indent, p.name });
+                    try buf.print(allocator, "{s}    {s}: tl.Flags = .{{}},\n", .{ indent, p.name });
                 } else if (p.flag_bit) |bit| {
                     const ftype = try tlTypeToZig(p.type_name, union_types, single_types, tmp, true, false);
                     const fname = names.fieldName(p.name, &field_buf);

@@ -86,7 +86,7 @@ fn userAuth(ptr: *anyopaque, io: std.Io) anyerror!void {
         .phone_number = phone,
         .api_id = client.opts.api_id,
         .api_hash = client.opts.api_hash,
-        .settings = .{ .flags = .{} },
+        .settings = .{},
     });
 
     const code_hash: []const u8 = switch (sent) {
@@ -103,7 +103,6 @@ fn userAuth(ptr: *anyopaque, io: std.Io) anyerror!void {
     const code = try prompt(io, "verification code: ", &code_r_buf);
 
     const auth = client.call(io, functions.auth.SignIn{
-        .flags = .{},
         .phone_number = phone,
         .phone_code_hash = code_hash,
         .phone_code = .some(code),

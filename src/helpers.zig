@@ -25,11 +25,9 @@ pub fn reply(
     };
     const peer = peerFromMessage(ctx.entities, msg) orelse return;
     _ = try ctx.call(functions.messages.SendMessage{
-        .flags = .{},
         .peer = peer,
         .message = text,
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
-            .flags = .{},
             .reply_to_msg_id = id,
         } }) else .none,
         .random_id = client_mod.nextRandomId(),
@@ -54,13 +52,11 @@ pub fn sendPhoto(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         .InputFileBig => {},
     };
     _ = try ctx.call(functions.messages.SendMedia{
-        .flags = .{},
         .peer = peer,
-        .media = .{ .InputMediaUploadedPhoto = .{ .flags = .{}, .file = input_file } },
+        .media = .{ .InputMediaUploadedPhoto = .{ .file = input_file } },
         .message = opts.caption,
         .random_id = client_mod.nextRandomId(),
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
-            .flags = .{},
             .reply_to_msg_id = id,
         } }) else .none,
     });
@@ -80,10 +76,8 @@ pub fn sendDocument(ctx: Context, update: types.UpdateNewMessage, data: []const 
     };
     var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeFilename = .{ .file_name = "file" } }};
     _ = try ctx.call(functions.messages.SendMedia{
-        .flags = .{},
         .peer = peer,
         .media = .{ .InputMediaUploadedDocument = .{
-            .flags = .{},
             .file = input_file,
             .mime_type = mime_type,
             .attributes = &attrs,
@@ -91,7 +85,6 @@ pub fn sendDocument(ctx: Context, update: types.UpdateNewMessage, data: []const 
         .message = opts.caption,
         .random_id = client_mod.nextRandomId(),
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
-            .flags = .{},
             .reply_to_msg_id = id,
         } }) else .none,
     });
@@ -107,7 +100,6 @@ pub const CallbackAnswerOptions = struct {
 /// Answer a button callback query (UpdateBotCallbackQuery).
 pub fn answerCallbackQuery(ctx: Context, update: types.UpdateBotCallbackQuery, opts: CallbackAnswerOptions) !void {
     _ = try ctx.call(functions.messages.SetBotCallbackAnswer{
-        .flags = .{},
         .alert = if (opts.alert) .some({}) else .none,
         .query_id = update.query_id,
         .message = if (opts.text) |t| .some(t) else .none,
@@ -119,7 +111,6 @@ pub fn answerCallbackQuery(ctx: Context, update: types.UpdateBotCallbackQuery, o
 /// Answer a callback query from an inline message (UpdateInlineBotCallbackQuery).
 pub fn answerInlineCallbackQuery(ctx: Context, update: types.UpdateInlineBotCallbackQuery, opts: CallbackAnswerOptions) !void {
     _ = try ctx.call(functions.messages.SetBotCallbackAnswer{
-        .flags = .{},
         .alert = if (opts.alert) .some({}) else .none,
         .query_id = update.query_id,
         .message = if (opts.text) |t| .some(t) else .none,
@@ -138,7 +129,6 @@ pub const InlineQueryOptions = struct {
 /// Answer an inline query (UpdateBotInlineQuery). Results are constructed by the caller.
 pub fn answerInlineQuery(ctx: Context, update: types.UpdateBotInlineQuery, results: []const types.InputBotInlineResult, opts: InlineQueryOptions) !void {
     _ = try ctx.call(functions.messages.SetInlineBotResults{
-        .flags = .{},
         .gallery = if (opts.is_gallery) .some({}) else .none,
         .private = if (opts.is_private) .some({}) else .none,
         .query_id = update.query_id,

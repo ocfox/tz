@@ -42,7 +42,7 @@ defer ctx.allocator.free(users);
 
 // mutate: discard the response
 var ids = [_]i32{msg.id};
-_ = try ctx.call(f.messages.DeleteMessages{ .flags = .{}, .id = &ids });
+_ = try ctx.call(f.messages.DeleteMessages{ .id = &ids });
 ```
 
 **Register handlers** — multiple handlers on the same type are zero-overhead (comptime dispatch):
