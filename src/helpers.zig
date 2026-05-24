@@ -179,13 +179,18 @@ pub fn sendVideo(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
     });
 }
 
+pub const AlbumItemKind = enum { photo, document };
+
 pub const AlbumItem = struct {
     data: []const u8,
     caption: []const u8 = "",
-    name: []const u8 = "photo.jpg",
+    name: []const u8 = "file",
+    kind: AlbumItemKind = .photo,
+    mime_type: []const u8 = "application/octet-stream",
 };
 
-/// Upload and send multiple photos as an album (SendMultiMedia).
+/// Upload and send files as an album (SendMultiMedia).
+/// Each item can be a photo or document; set kind and mime_type accordingly.
 pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const AlbumItem, opts: ReplyOptions) !void {
     const msg = switch (update.message) {
         .Message => |m| m,
@@ -203,11 +208,20 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
     for (items, 0..) |item, i| {
         const input_file = try upload_mod.upload(ctx, item.data, .{ .name = item.name });
         if (input_file == .InputFile) checksums[i] = input_file.InputFile.md5_checksum;
-        media_items[i] = .{
-            .media = .{ .InputMediaUploadedPhoto = .{ .file = input_file } },
-
-            .message = item.caption,
+        const media: types.InputMedia = switch (item.kind) {
+            .photo => .{ .InputMediaUploadedPhoto = .{ .file = input_file } },
+            .document => blk: {
+                var attrs = [_]types.DocumentAttribute{
+                    .{ .DocumentAttributeFilename = .{ .file_name = item.name } },
+                };
+                break :blk .{ .InputMediaUploadedDocument = .{
+                    .file = input_file,
+                    .mime_type = item.mime_type,
+                    .attributes = &attrs,
+                } };
+            },
         };
+        media_items[i] = .{ .media = media, .message = item.caption };
     }
 
     _ = try ctx.call(functions.messages.SendMultiMedia{
@@ -470,6 +484,50 @@ fn utf16Len(s: []const u8) i32 {
         len += if (cp >= 0x10000) 2 else 1;
     }
     return len;
+}
+
+/// Add an emoji reaction to a message.
+pub fn addReaction(ctx: Context, peer: types.InputPeer, msg_id: i32, emoticon: []const u8) !void {
+    var reactions = [_]types.Reaction{.{ .ReactionEmoji = .{ .emoticon = emoticon } }};
+    _ = try ctx.call(functions.messages.SendReaction{
+        .peer = peer,
+        .msg_id = msg_id,
+        .reaction = .some(&reactions),
+    });
+}
+
+/// Remove all reactions from a message.
+pub fn removeReaction(ctx: Context, peer: types.InputPeer, msg_id: i32) !void {
+    var reactions = [_]types.Reaction{};
+    _ = try ctx.call(functions.messages.SendReaction{
+        .peer = peer,
+        .msg_id = msg_id,
+        .reaction = .some(&reactions),
+    });
+}
+
+/// Fetch user info. Caller owns the returned slice (ctx.allocator.free).
+pub fn getUsers(ctx: Context, ids: []types.InputUser) ![]types.User {
+    return ctx.call(functions.users.GetUsers{ .id = ids });
+}
+
+/// Fetch chats (basic groups) by id list. Caller owns the returned slice.
+/// Returns the chats field of the response union.
+pub fn getChats(ctx: Context, ids: []i64) ![]types.Chat {
+    const res = try ctx.call(functions.messages.GetChats{ .id = ids });
+    return switch (res) {
+        .MessagesChats => |r| r.chats,
+        .MessagesChatsSlice => |r| r.chats,
+    };
+}
+
+/// Fetch channels by InputChannel list. Caller owns the returned slice.
+pub fn getChannels(ctx: Context, ids: []types.InputChannel) ![]types.Chat {
+    const res = try ctx.call(functions.channels.GetChannels{ .id = ids });
+    return switch (res) {
+        .MessagesChats => |r| r.chats,
+        .MessagesChatsSlice => |r| r.chats,
+    };
 }
 
 pub fn peerFromMessage(entities: Entities, msg: types.Message_) ?types.InputPeer {

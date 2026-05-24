@@ -15,7 +15,8 @@ Echo bot binary: ~518 KB (`ReleaseSmall`) / ~780KB (`ReleaseSmall`,statically li
 - Comptime handler dispatch — register handlers per update type, zero runtime overhead
 - `FileStorage` / `MemoryStorage` for session persistence
 - Bot and user account auth
-- File upload (`tz.upload`) and download (`tz.download`) with automatic cross-DC routing
+- File upload and download (`tz.helpers.upload` / `tz.helpers.download`) with automatic cross-DC routing
+- `tz.helpers` — send photo/document/audio/video/voice/album, forward, pin, react, edit, inline keyboards, formatted text
 
 ## Usage
 
@@ -68,6 +69,44 @@ const client = try tz.Client(handlers).init(allocator, .{
 defer client.deinit();
 
 try client.run(io);
+```
+
+**`tz.helpers` shortcuts** — common operations without manual TL construction:
+
+```zig
+// Send media
+try tz.helpers.sendPhoto(ctx, update, jpeg_bytes, .{});
+try tz.helpers.sendDocument(ctx, update, pdf_bytes, "application/pdf", .{ .caption = "report" });
+try tz.helpers.sendAudio(ctx, update, mp3_bytes, "audio/mpeg", .{ .title = "Track", .performer = "Artist" });
+try tz.helpers.sendVideo(ctx, update, mp4_bytes, "video/mp4", .{});
+try tz.helpers.sendVoice(ctx, update, ogg_bytes, .{});
+
+// Album (multi-media)
+const items = &[_]tz.helpers.AlbumItem{
+    .{ .data = img1, .caption = "first" },
+    .{ .data = img2 },
+};
+try tz.helpers.sendAlbum(ctx, update, items, .{});
+
+// Forward / pin
+try tz.helpers.forwardMessages(ctx, from_peer, to_peer, &[_]i32{msg.id});
+try tz.helpers.pinMessage(ctx, peer, msg.id, .{});
+
+// React
+try tz.helpers.addReaction(ctx, peer, msg.id, "👍");
+try tz.helpers.removeReaction(ctx, peer, msg.id);
+
+// Formatted text with MessageEntity
+var ft = tz.helpers.FormattedText.init(allocator);
+defer ft.deinit();
+try ft.bold("Warning");
+try ft.plain(": file not found");
+try tz.helpers.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });
+
+// Download
+const location = tz.helpers.photoLocation(photo) orelse return;
+const bytes = try tz.helpers.download(ctx, location);
+defer allocator.free(bytes);
 ```
 
 See [examples/](examples/) for complete runnable examples.
