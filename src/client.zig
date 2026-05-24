@@ -328,10 +328,21 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 return error.AuthTransferFailed;
         }
 
+        fn saveHomeDc(self: *Self, io: Io) void {
+            self.opts.storage.save(io, .{
+                .auth_key = .{0} ** 256,
+                .auth_key_id = self.opts.dc.id, // encodes home DC; nonzero so FileStorage keeps it
+                .server_salt = 0,
+                .dc_id = 0, // slot 0 = home DC pointer
+            }) catch |e| std.log.warn("failed to save home DC: {}", .{e});
+        }
+
         fn runOnce(self: *Self, io: Io) !void {
             if (!self.dc_resolved) {
-                if (try self.opts.storage.load(io, self.allocator, self.opts.dc.id)) |saved| {
-                    if (connector_mod.findDc(saved.dc_id, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
+                // Slot 0 stores the home DC: auth_key_id holds the DC id, auth_key is zeroed.
+                if (try self.opts.storage.load(io, self.allocator, 0)) |home| {
+                    const home_dc: u8 = @truncate(@as(u64, @bitCast(home.auth_key_id)));
+                    if (connector_mod.findDc(home_dc, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
                 }
                 self.dc_resolved = true;
             }
@@ -377,11 +388,13 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                         else => return err,
                     };
                     std.log.info("bot authenticated", .{});
+                    self.saveHomeDc(io);
                 }
             } else if (self.opts.auth_fn) |f| {
                 if (!self.user_authorized) {
                     try f(self, io);
                     self.user_authorized = true;
+                    self.saveHomeDc(io);
                 }
             }
             self.fetchDcList(io) catch |err|
