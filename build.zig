@@ -72,7 +72,6 @@ pub fn build(b: *std.Build) void {
     const unit_tests = b.addTest(.{ .root_module = mod });
     test_step.dependOn(&b.addRunArtifact(unit_tests).step);
 
-
     // examples
     const echo_bot = b.addExecutable(.{
         .name = "echo_bot",
