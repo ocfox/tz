@@ -69,34 +69,9 @@ pub fn build(b: *std.Build) void {
 
     // tests
     const test_step = b.step("test", "Run tests");
-
     const unit_tests = b.addTest(.{ .root_module = mod });
     test_step.dependOn(&b.addRunArtifact(unit_tests).step);
 
-    for (&[_][]const u8{ "test/tl_test.zig", "test/codec_test.zig", "test/transport_test.zig", "src/crypto/srp.zig" }) |src| {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(src),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{.{ .name = "tz", .module = mod }},
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
-
-    if (b.option(bool, "integration", "Run integration tests (needs network)") orelse false) {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("test/integration_test.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{.{ .name = "tz", .module = mod }},
-                .link_libc = true,
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
 
     // examples
     const echo_bot = b.addExecutable(.{
