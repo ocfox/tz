@@ -222,7 +222,9 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
                 } };
             },
         };
-        media_items[i] = .{ .media = media, .message = item.caption };
+        var rand_id: i64 = undefined;
+        _ = std.os.linux.getrandom(@as([*]u8, @ptrCast(&rand_id)), 8, 0);
+        media_items[i] = .{ .media = media, .message = item.caption, .random_id = rand_id };
     }
 
     try ctx.exec(functions.messages.SendMultiMedia{
