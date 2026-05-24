@@ -106,6 +106,21 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_echo_bot.addArgs(args);
     b.step("echo-bot", "Run echo_bot example").dependOn(&run_echo_bot.step);
 
+    const any_call = b.addExecutable(.{
+        .name = "any_call",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/any_call.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "tz", .module = mod }},
+            .link_libc = true,
+        }),
+    });
+    b.installArtifact(any_call);
+    const run_any_call = b.addRunArtifact(any_call);
+    if (b.args) |args| run_any_call.addArgs(args);
+    b.step("any-call", "Run any_call example").dependOn(&run_any_call.step);
+
     const user_login = b.addExecutable(.{
         .name = "user_login",
         .root_module = b.createModule(.{
