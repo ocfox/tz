@@ -238,6 +238,7 @@ pub fn forwardMessages(ctx: Context, from_peer: types.InputPeer, to_peer: types.
     const random_ids = try ctx.allocator.alloc(i64, ids.len);
     defer ctx.allocator.free(random_ids);
     for (random_ids) |*r| {
+        // SAFETY: getrandom fills all 8 bytes before entropy is read
         var entropy: i64 = undefined;
         _ = std.os.linux.getrandom(@as([*]u8, @ptrCast(&entropy)), 8, 0);
         r.* = entropy;
