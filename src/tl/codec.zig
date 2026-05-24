@@ -378,7 +378,7 @@ fn decodeStruct(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyer
 pub fn decodeStructBody(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerror!T {
     // SAFETY: every field is written by the inline for loop below before result is returned
     var result: T = undefined;
-    var flags_val: u32 = 0;  // flags word 0
+    var flags_val: u32 = 0; // flags word 0
     var flags2_val: u32 = 0; // flags word 1
     inline for (std.meta.fields(T)) |field| {
         if (comptime isFlags(field.type)) {

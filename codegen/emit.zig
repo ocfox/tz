@@ -107,7 +107,10 @@ pub fn emitTypes(
         if (ctor.is_function) continue;
         const key = try std.fmt.allocPrint(allocator, "{s}\x00{s}", .{ ctor.result_type, ctor.name });
         const gop = try seen.getOrPut(key);
-        if (gop.found_existing) { allocator.free(key); continue; }
+        if (gop.found_existing) {
+            allocator.free(key);
+            continue;
+        }
 
         const base = names.typeName(ctor.name, &name_buf);
         const ctor_name = if (name_suffix.contains(ctor.name))

@@ -21,9 +21,9 @@ pub const TcpTransport = struct {
         var sw = self.stream.writer(io, &buf);
         const w = &sw.interface;
         switch (self.mode) {
-            .abridged     => try w.writeByte(0xef),
+            .abridged => try w.writeByte(0xef),
             .intermediate => try w.writeAll(&[4]u8{ 0xee, 0xee, 0xee, 0xee }),
-            .padded       => try w.writeAll(&[4]u8{ 0xdd, 0xdd, 0xdd, 0xdd }),
+            .padded => try w.writeAll(&[4]u8{ 0xdd, 0xdd, 0xdd, 0xdd }),
         }
         try w.flush();
     }

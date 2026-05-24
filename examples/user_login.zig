@@ -45,9 +45,14 @@ fn handle2FA(client: *Client, io: std.Io) !void {
 
     std.log.info("computing 2FA key (may take a few seconds)...", .{});
     const answer = try tz.crypto.srp.compute(
-        client.allocator, io,
-        algo.salt1, algo.salt2, algo.g, algo.p,
-        srp_B, password,
+        client.allocator,
+        io,
+        algo.salt1,
+        algo.salt2,
+        algo.g,
+        algo.p,
+        srp_B,
+        password,
     );
 
     const auth = try client.call(io, functions.auth.CheckPassword{

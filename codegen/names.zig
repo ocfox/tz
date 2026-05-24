@@ -4,7 +4,10 @@ pub fn typeName(tl_type: []const u8, buf: []u8) []u8 {
     var out: usize = 0;
     var cap = true;
     for (tl_type) |c| {
-        if (c == '.' or c == '_') { cap = true; continue; }
+        if (c == '.' or c == '_') {
+            cap = true;
+            continue;
+        }
         buf[out] = if (cap) std.ascii.toUpper(c) else c;
         cap = false;
         out += 1;

@@ -110,8 +110,14 @@ pub fn parseFile(path: []const u8, schema: *Schema, io: std.Io, gpa: Allocator, 
     var is_function = false;
     var lines = std.mem.tokenizeScalar(u8, content, '\n');
     while (lines.next()) |line| {
-        if (std.mem.indexOf(u8, line, "---functions---") != null) { is_function = true; continue; }
-        if (std.mem.indexOf(u8, line, "---types---") != null) { is_function = false; continue; }
+        if (std.mem.indexOf(u8, line, "---functions---") != null) {
+            is_function = true;
+            continue;
+        }
+        if (std.mem.indexOf(u8, line, "---types---") != null) {
+            is_function = false;
+            continue;
+        }
         const ctor = parseLine(line, is_function, arena) catch continue;
         if (ctor) |c| try schema.constructors.append(gpa, c);
     }

@@ -115,13 +115,13 @@ pub const Session = struct {
         var aes_iv: [32]u8 = undefined;
         kdf(&self.auth_key, msg_key, 8, &aes_key, &aes_iv);
 
-    if (encrypted.len < 32 or encrypted.len % 16 != 0) return error.BadLength;
-    try self.decrypt_scratch.resize(allocator, encrypted.len);
-    const inner = self.decrypt_scratch.items;
-    @memcpy(inner, encrypted);
-    aes_ige.decrypt(aes_key, aes_iv, inner);
+        if (encrypted.len < 32 or encrypted.len % 16 != 0) return error.BadLength;
+        try self.decrypt_scratch.resize(allocator, encrypted.len);
+        const inner = self.decrypt_scratch.items;
+        @memcpy(inner, encrypted);
+        aes_ige.decrypt(aes_key, aes_iv, inner);
 
-    const payload_len = std.mem.readInt(u32, inner[28..32], .little);
+        const payload_len = std.mem.readInt(u32, inner[28..32], .little);
         if (32 + payload_len > inner.len) return error.BadLength;
         return try allocator.dupe(u8, inner[32..][0..payload_len]);
     }
