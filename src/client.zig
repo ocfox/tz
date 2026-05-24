@@ -125,6 +125,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         user_authorized: bool = false,
         dc_list: ?[]connector_mod.DC = null,
         sub_conns: std.AutoHashMapUnmanaged(u8, *SubConn) = .empty,
+        sub_conns_mu: std.Io.Mutex = std.Io.Mutex.init,
         last_file_dc: ?u8 = null,
 
         pub fn init(allocator: Allocator, opts: ClientOptions) !*Self {
@@ -244,12 +245,14 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             return c.call(io2, bytes);
         }
 
-        fn callRawOnDc(self: *Self, io2: Io, dc_id: u8, bytes: []const u8) ![]u8 {
+        fn getOrCreateSubConn(self: *Self, io2: Io, dc_id: u8) !*Connector {
+            try self.sub_conns_mu.lock(io2);
+            errdefer self.sub_conns_mu.unlock(io2);
             const gop = try self.sub_conns.getOrPut(self.allocator, dc_id);
             if (!gop.found_existing) {
+                errdefer _ = self.sub_conns.remove(dc_id);
                 const sub = try self.allocator.create(SubConn);
                 errdefer self.allocator.destroy(sub);
-                // SAFETY: connector is assigned two lines below before sub is used
                 sub.* = .{ .connector = undefined };
                 const dc = self.findDc(dc_id) orelse return error.DcNotFound;
                 sub.connector = try Connector.connect(io2, self.allocator, .{
@@ -264,7 +267,26 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 try sub.connector.run(io2, sub_conn_noop_handler);
                 gop.value_ptr.* = sub;
             }
-            return self.callViaConnector(io2, gop.value_ptr.*.connector, bytes);
+            const connector = gop.value_ptr.*.connector;
+            self.sub_conns_mu.unlock(io2);
+            return connector;
+        }
+
+        fn removeSubConn(self: *Self, io2: Io, dc_id: u8) void {
+            self.sub_conns_mu.lock(io2) catch return;
+            defer self.sub_conns_mu.unlock(io2);
+            const kv = self.sub_conns.fetchRemove(dc_id) orelse return;
+            kv.value.connector.close(io2);
+            kv.value.connector.deinit();
+            self.allocator.destroy(kv.value);
+        }
+
+        fn callRawOnDc(self: *Self, io2: Io, dc_id: u8, bytes: []const u8) ![]u8 {
+            const connector = try self.getOrCreateSubConn(io2, dc_id);
+            return self.callViaConnector(io2, connector, bytes) catch |err| {
+                self.removeSubConn(io2, dc_id);
+                return err;
+            };
         }
 
         fn transferAuth(self: *Self, io2: Io, sub: *Connector, dc_id: u8) !void {
