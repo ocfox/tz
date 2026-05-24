@@ -204,6 +204,9 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
     defer ctx.allocator.free(checksums);
     defer for (checksums) |c| if (c) |s| ctx.allocator.free(s);
     @memset(checksums, null);
+    // One filename attribute slot per item; kept alive until exec() below.
+    const attrs_buf = try ctx.allocator.alloc(types.DocumentAttribute, items.len);
+    defer ctx.allocator.free(attrs_buf);
 
     for (items, 0..) |item, i| {
         const input_file = try upload_mod.upload(ctx, item.data, .{ .name = item.name });
@@ -211,13 +214,11 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
         const media: types.InputMedia = switch (item.kind) {
             .photo => .{ .InputMediaUploadedPhoto = .{ .file = input_file } },
             .document => blk: {
-                var attrs = [_]types.DocumentAttribute{
-                    .{ .DocumentAttributeFilename = .{ .file_name = item.name } },
-                };
+                attrs_buf[i] = .{ .DocumentAttributeFilename = .{ .file_name = item.name } };
                 break :blk .{ .InputMediaUploadedDocument = .{
                     .file = input_file,
                     .mime_type = item.mime_type,
-                    .attributes = &attrs,
+                    .attributes = attrs_buf[i .. i + 1],
                 } };
             },
         };
