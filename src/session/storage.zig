@@ -77,6 +77,45 @@ pub const FileStorage = struct {
     }
 };
 
+/// Session storage backed by a single file containing fixed 280-byte segments,
+/// one per DC ID (segment at offset dc_id * @sizeOf(SessionData)).
+/// Allows multiple DCs to share one file without truncating each other's data.
+pub const MultiDcFileStorage = struct {
+    path: []const u8,
+    dc_id: u8,
+
+    pub fn init(path: []const u8, dc_id: u8) MultiDcFileStorage {
+        return .{ .path = path, .dc_id = dc_id };
+    }
+    pub fn storage(self: *MultiDcFileStorage) SessionStorage {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+    const vtable = SessionStorage.VTable{ .load = load, .save = save };
+    fn load(ptr: *anyopaque, io: Io, _: Allocator) anyerror!?SessionData {
+        const self: *MultiDcFileStorage = @ptrCast(@alignCast(ptr));
+        const file = Io.Dir.cwd().openFile(io, self.path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return null,
+            else => return err,
+        };
+        defer file.close(io);
+        // SAFETY: immediately overwritten by readPositionalAll
+        var data: SessionData = undefined;
+        const offset: u64 = @as(u64, self.dc_id) * @sizeOf(SessionData);
+        const n = try file.readPositionalAll(io, std.mem.asBytes(&data), offset);
+        if (n != @sizeOf(SessionData)) return null;
+        if (data.auth_key_id == 0) return null;
+        return data;
+    }
+    fn save(ptr: *anyopaque, io: Io, data: SessionData) anyerror!void {
+        const self: *MultiDcFileStorage = @ptrCast(@alignCast(ptr));
+        // truncate=false: create if not exists, append/update if exists.
+        const file = try Io.Dir.cwd().createFile(io, self.path, .{ .truncate = false });
+        defer file.close(io);
+        const offset: u64 = @as(u64, data.dc_id) * @sizeOf(SessionData);
+        try file.writePositionalAll(io, std.mem.asBytes(&data), offset);
+    }
+};
+
 test "MemoryStorage load/save roundtrip" {
     var mem = MemoryStorage{};
     const s = mem.storage();

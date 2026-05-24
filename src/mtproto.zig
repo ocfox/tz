@@ -140,7 +140,10 @@ pub fn MtProto(comptime Handler: type) type {
                     break;
                 };
                 defer self.allocator.free(frame);
-                const payload = self.session.decrypt(frame, self.allocator) catch continue;
+                const payload = self.session.decrypt(frame, self.allocator) catch |e| {
+                    std.log.debug("readLoop: decrypt failed: {}", .{e});
+                    continue;
+                };
                 defer self.allocator.free(payload);
                 self.dispatch(io, payload) catch |err| std.log.debug("dispatch: {}", .{err});
             }
@@ -183,8 +186,18 @@ pub fn MtProto(comptime Handler: type) type {
                     }
                 },
                 types.BadMsgNotification_.cid => {
-                    std.log.warn("bad_msg_notification", .{});
-                    self.drainPending(io);
+                    if (payload.len >= 20) {
+                        const error_code = std.mem.readInt(i32, payload[16..20], .little);
+                        std.log.warn("bad_msg_notification error_code={}", .{error_code});
+                        switch (error_code) {
+                            // Msg ID / seqno issues: retry with corrected values.
+                            16, 17, 18, 19, 20, 32, 33 => self.retryPending(io),
+                            else => self.drainPending(io),
+                        }
+                    } else {
+                        std.log.warn("bad_msg_notification (short payload)", .{});
+                        self.drainPending(io);
+                    }
                 },
                 types.Pong.cid => {
                     self.pong_event.set(io);
@@ -215,7 +228,10 @@ pub fn MtProto(comptime Handler: type) type {
             const pr = blk: {
                 self.pending_mutex.lockUncancelable(io);
                 defer self.pending_mutex.unlock(io);
-                const e = self.pending.fetchRemove(req_msg_id) orelse return;
+                const e = self.pending.fetchRemove(req_msg_id) orelse {
+                    std.log.debug("deliverRpcResult: no pending for msg_id={x}", .{req_msg_id});
+                    return;
+                };
                 break :blk e.value;
             };
             const result = try self.allocator.dupe(u8, payload[12..]);

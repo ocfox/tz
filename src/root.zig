@@ -11,6 +11,7 @@ pub const handler = client_mod.handler;
 
 pub const FileStorage = @import("session/storage.zig").FileStorage;
 pub const MemoryStorage = @import("session/storage.zig").MemoryStorage;
+pub const MultiDcFileStorage = @import("session/storage.zig").MultiDcFileStorage;
 
 pub const DC = connector_mod.DC;
 pub const default_dcs = connector_mod.default_dcs;
