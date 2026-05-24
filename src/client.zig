@@ -46,13 +46,19 @@ pub const Context = struct {
 
 pub const Entities = struct {
     users: std.AutoHashMapUnmanaged(i64, i64) = .empty,
+    channels: std.AutoHashMapUnmanaged(i64, i64) = .empty,
 
     fn deinit(self: *Entities, allocator: Allocator) void {
         self.users.deinit(allocator);
+        self.channels.deinit(allocator);
     }
 
     pub fn accessHash(self: *const Entities, user_id: i64) ?i64 {
         return self.users.get(user_id);
+    }
+
+    pub fn channelAccessHash(self: *const Entities, channel_id: i64) ?i64 {
+        return self.channels.get(channel_id);
     }
 };
 
@@ -155,7 +161,13 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     .user_id = p.user_id,
                     .access_hash = entities.accessHash(p.user_id) orelse return,
                 } },
-                else => return,
+                .PeerChat => |p| .{ .InputPeerChat = .{
+                    .chat_id = p.chat_id,
+                } },
+                .PeerChannel => |p| .{ .InputPeerChannel = .{
+                    .channel_id = p.channel_id,
+                    .access_hash = entities.channelAccessHash(p.channel_id) orelse return,
+                } },
             };
             _ = try self.call(io, functions.messages.SendMessage{
                 .flags = .{},
@@ -323,6 +335,11 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             for (upd.users) |u| switch (u) {
                 .User => |user| if (user.access_hash.value) |ah|
                     try entities.users.put(self.allocator, user.id, ah),
+                else => {},
+            };
+            for (upd.chats) |c| switch (c) {
+                .Channel => |ch| if (ch.access_hash.value) |ah|
+                    try entities.channels.put(self.allocator, ch.id, ah),
                 else => {},
             };
 
