@@ -4,7 +4,7 @@ Work in progress — rough edges, missing features, API may change.
 
 Telegram MTProto API client in Zig, requires Zig 0.16.
 
-Echo bot binary: ~518 KB (`ReleaseSmall`) / ~780KB (`ReleaseSmall`,statically linked)
+Echo bot binary ~700KB (`ReleaseSmall`,statically linked)
 
 ## Features
 
