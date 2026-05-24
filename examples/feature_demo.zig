@@ -213,6 +213,18 @@ fn onForward(ctx: h.Context, update: tg.UpdateNewMessage) !void {
     try h.forwardMessages(ctx, mp.peer, mp.peer, &fwd_ids);
 }
 
+fn stickerFilename(doc: tg.Document_) []const u8 {
+    for (doc.attributes) |attr| {
+        switch (attr) {
+            .DocumentAttributeFilename => |a| return a.file_name,
+            else => {},
+        }
+    }
+    if (std.mem.eql(u8, doc.mime_type, "video/webm")) return "sticker.webm";
+    if (std.mem.eql(u8, doc.mime_type, "application/x-tgsticker")) return "sticker.tgs";
+    return "sticker.webp";
+}
+
 // --- update handlers ---
 
 const R = h.Cmd(tg.UpdateNewMessage);
@@ -240,7 +252,6 @@ fn onMessage(ctx: h.Context, update: tg.UpdateNewMessage) !void {
         R.exact("/forward", onForward),
     })) return;
 
-    // If the message has a photo, download it and re-send as document.
     const media = msg.media.value orelse return;
     switch (media) {
         .MessageMediaPhoto => |mp| {
@@ -252,6 +263,21 @@ fn onMessage(ctx: h.Context, update: tg.UpdateNewMessage) !void {
             const bytes = try h.download(ctx, location);
             defer ctx.allocator.free(bytes);
             try h.sendDocument(ctx, update, bytes, "image/jpeg", .{ .caption = "re-sent photo" });
+        },
+        .MessageMediaDocument => |md| {
+            const doc_union = md.document.value orelse return;
+            const doc = switch (doc_union) {
+                .Document => |d| d,
+                else => return,
+            };
+            const is_sticker = for (doc.attributes) |attr| {
+                if (attr == .DocumentAttributeSticker) break true;
+            } else false;
+            if (!is_sticker) return;
+            const location = h.documentLocation(doc_union) orelse return;
+            const bytes = try h.download(ctx, location);
+            defer ctx.allocator.free(bytes);
+            try h.sendDocument(ctx, update, bytes, doc.mime_type, .{ .caption = stickerFilename(doc) });
         },
         else => {},
     }
