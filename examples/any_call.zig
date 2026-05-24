@@ -1,9 +1,11 @@
 //! any_call — demonstrates direct ctx.call() usage without helpers.
 //!
-//! Commands:
-//!   /whoami   — fetch own user via users.GetUsers and reply with name + id
-//!   /delete   — delete the command message itself
-//!   anything else — echo with a quote reply, peer constructed manually
+//! Two handlers on the same update type, split by functional boundary:
+//!   onCommand  — /whoami (fetch own user) and /delete (delete command message)
+//!   onEcho     — everything else: echo with a quote reply
+//!
+//! UpdateNewMessage.message is a union (Message | MessageService | MessageEmpty),
+//! so every handler must switch on it — there is no shortcut.
 //!
 //! usage: TZ_API_ID=<id> TZ_API_HASH=<hash> TZ_BOT_TOKEN=<token> zig build any-call
 
@@ -12,31 +14,18 @@ const tz = @import("tz");
 const tg = tz.types;
 const f = tz.functions;
 
-fn onNewMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
+fn onCommand(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
     const msg = switch (update.message) {
         .Message => |m| m,
         else => return,
     };
-    if (msg.message.len == 0) return;
+    if (msg.message.len == 0 or msg.message[0] != '/') return;
 
-    // Resolve the reply target peer from ctx.entities manually.
-    // helpers.peerFromMessage does the same thing — shown here for clarity.
-    const peer: tg.InputPeer = switch (msg.peer_id) {
-        .PeerUser => |p| .{ .InputPeerUser = .{
-            .user_id = p.user_id,
-            .access_hash = ctx.entities.accessHash(p.user_id) orelse return,
-        } },
-        .PeerChat => |p| .{ .InputPeerChat = .{ .chat_id = p.chat_id } },
-        .PeerChannel => |p| .{ .InputPeerChannel = .{
-            .channel_id = p.channel_id,
-            .access_hash = ctx.entities.channelAccessHash(p.channel_id) orelse return,
-        } },
-    };
+    const peer = tz.helpers.peerFromMessage(ctx.entities, msg) orelse return;
 
     if (std.mem.eql(u8, msg.message, "/whoami")) {
-        // Case 1: call a function that returns data, build a reply from it.
-        var self_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
-        const users = try ctx.call(f.users.GetUsers{ .id = &self_input });
+        var id_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
+        const users = try ctx.call(f.users.GetUsers{ .id = &id_input });
         defer ctx.allocator.free(users);
 
         const user = switch (users[0]) {
@@ -49,7 +38,6 @@ fn onNewMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
             user.id,
             user.first_name.value orelse "(none)",
         });
-
         _ = try ctx.call(f.messages.SendMessage{
             .flags = .{},
             .peer = peer,
@@ -57,29 +45,37 @@ fn onNewMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
             .random_id = tz.nextRandomId(),
         });
     } else if (std.mem.eql(u8, msg.message, "/delete")) {
-        // Case 2: call a function that mutates state, discard the response.
         var ids = [_]i32{msg.id};
         _ = try ctx.call(f.messages.DeleteMessages{
             .flags = .{},
             .id = &ids,
         });
-    } else {
-        // Case 3: echo with a quote reply — reply_to constructed explicitly.
-        _ = try ctx.call(f.messages.SendMessage{
-            .flags = .{},
-            .peer = peer,
-            .message = msg.message,
-            .reply_to = .some(.{ .InputReplyToMessage = .{
-                .flags = .{},
-                .reply_to_msg_id = msg.id,
-            } }),
-            .random_id = tz.nextRandomId(),
-        });
     }
 }
 
+fn onEcho(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
+    const msg = switch (update.message) {
+        .Message => |m| m,
+        else => return,
+    };
+    if (msg.message.len == 0 or msg.message[0] == '/') return;
+
+    const peer = tz.helpers.peerFromMessage(ctx.entities, msg) orelse return;
+    _ = try ctx.call(f.messages.SendMessage{
+        .flags = .{},
+        .peer = peer,
+        .message = msg.message,
+        .reply_to = .some(.{ .InputReplyToMessage = .{
+            .flags = .{},
+            .reply_to_msg_id = msg.id,
+        } }),
+        .random_id = tz.nextRandomId(),
+    });
+}
+
 const handlers = &.{
-    tz.handler(tg.UpdateNewMessage, onNewMessage),
+    tz.handler(tg.UpdateNewMessage, onCommand),
+    tz.handler(tg.UpdateNewMessage, onEcho),
 };
 
 pub fn main() !void {

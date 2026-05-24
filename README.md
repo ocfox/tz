@@ -24,12 +24,13 @@ const tz = @import("tz");
 const tg = tz.types;
 
 fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
+    // UpdateNewMessage.message is a union — switch to get the concrete Message.
     const msg = switch (update.message) {
         .Message => |m| m,
         else => return,
     };
     if (msg.message.len == 0) return;
-    try ctx.reply(update, msg.message);
+    try tz.helpers.reply(ctx, update, msg.message, .{});
 }
 
 const handlers = &.{
@@ -59,7 +60,7 @@ pub fn main() !void {
 }
 ```
 
-See [examples/echo_bot.zig](examples/echo_bot.zig) for a runnable example.
+See [examples](examples/) for runnable examples.
 
 ## Dependency
 
