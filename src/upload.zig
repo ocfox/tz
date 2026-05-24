@@ -53,7 +53,7 @@ pub fn upload(ctx: Context, data: []const u8, opts: UploadOptions) !types.InputF
 
     var digest: [std.crypto.hash.Md5.digest_length]u8 = undefined;
     std.crypto.hash.Md5.hash(data, &digest, .{});
-    const md5_hex = try std.fmt.allocPrint(ctx.allocator, "{}", .{std.fmt.fmtSliceHexLower(&digest)});
+    const md5_hex = try std.fmt.allocPrint(ctx.allocator, "{s}", .{std.fmt.bytesToHex(&digest, .lower)});
     return .{ .InputFile = .{
         .id = file_id,
         .parts = n_parts,

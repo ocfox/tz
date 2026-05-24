@@ -58,7 +58,7 @@ pub fn sendPhoto(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
     const input_file = try upload_mod.upload(ctx, data, .{ .name = "photo.jpg" });
     defer switch (input_file) {
         .InputFile => |f| ctx.allocator.free(f.md5_checksum),
-        .InputFileBig => {},
+        .InputFileBig, .InputFileStoryDocument => {},
     };
     _ = try ctx.call(functions.messages.SendMedia{
         .peer = peer,
@@ -80,7 +80,7 @@ pub fn sendDocument(ctx: Context, update: types.UpdateNewMessage, data: []const 
     const input_file = try upload_mod.upload(ctx, data, .{ .name = "file" });
     defer switch (input_file) {
         .InputFile => |f| ctx.allocator.free(f.md5_checksum),
-        .InputFileBig => {},
+        .InputFileBig, .InputFileStoryDocument => {},
     };
     var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeFilename = .{ .file_name = "file" } }};
     _ = try ctx.call(functions.messages.SendMedia{
@@ -116,7 +116,7 @@ pub fn sendAudio(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
     const input_file = try upload_mod.upload(ctx, data, .{ .name = opts.name });
     defer switch (input_file) {
         .InputFile => |f| ctx.allocator.free(f.md5_checksum),
-        .InputFileBig => {},
+        .InputFileBig, .InputFileStoryDocument => {},
     };
     var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeAudio = .{
         .duration = opts.duration,
@@ -157,7 +157,7 @@ pub fn sendVideo(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
     const input_file = try upload_mod.upload(ctx, data, .{ .name = opts.name });
     defer switch (input_file) {
         .InputFile => |f| ctx.allocator.free(f.md5_checksum),
-        .InputFileBig => {},
+        .InputFileBig, .InputFileStoryDocument => {},
     };
     var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeVideo = .{
         .supports_streaming = if (opts.supports_streaming) .some({}) else .none,
@@ -237,7 +237,11 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
 pub fn forwardMessages(ctx: Context, from_peer: types.InputPeer, to_peer: types.InputPeer, ids: []i32) !void {
     const random_ids = try ctx.allocator.alloc(i64, ids.len);
     defer ctx.allocator.free(random_ids);
-    for (random_ids) |*r| r.* = std.crypto.random.int(i64);
+    for (random_ids) |*r| {
+        var entropy: i64 = undefined;
+        _ = std.os.linux.getrandom(@as([*]u8, @ptrCast(&entropy)), 8, 0);
+        r.* = entropy;
+    }
     _ = try ctx.call(functions.messages.ForwardMessages{
         .from_peer = from_peer,
         .id = ids,
@@ -374,7 +378,7 @@ pub fn sendVoice(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
     const input_file = try upload_mod.upload(ctx, data, .{ .name = opts.name });
     defer switch (input_file) {
         .InputFile => |f| ctx.allocator.free(f.md5_checksum),
-        .InputFileBig => {},
+        .InputFileBig, .InputFileStoryDocument => {},
     };
     var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeAudio = .{
         .voice = .some({}),
@@ -404,19 +408,21 @@ pub fn sendVoice(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
 ///   try ft.plain(": file not found");
 ///   try tz.helpers.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });
 pub const FormattedText = struct {
+    allocator: std.mem.Allocator,
     text: std.ArrayList(u8),
     entities: std.ArrayList(types.MessageEntity),
 
     pub fn init(allocator: std.mem.Allocator) FormattedText {
         return .{
-            .text = std.ArrayList(u8).init(allocator),
-            .entities = std.ArrayList(types.MessageEntity).init(allocator),
+            .allocator = allocator,
+            .text = .empty,
+            .entities = .empty,
         };
     }
 
     pub fn deinit(self: *FormattedText) void {
-        self.text.deinit();
-        self.entities.deinit();
+        self.text.deinit(self.allocator);
+        self.entities.deinit(self.allocator);
     }
 
     fn offset(self: *const FormattedText) i32 {
@@ -424,55 +430,55 @@ pub const FormattedText = struct {
     }
 
     pub fn plain(self: *FormattedText, s: []const u8) !void {
-        try self.text.appendSlice(s);
+        try self.text.appendSlice(self.allocator, s);
     }
 
     pub fn bold(self: *FormattedText, s: []const u8) !void {
         const off = self.offset();
-        try self.text.appendSlice(s);
-        try self.entities.append(.{ .MessageEntityBold = .{ .offset = off, .length = utf16Len(s) } });
+        try self.text.appendSlice(self.allocator, s);
+        try self.entities.append(self.allocator, .{ .MessageEntityBold = .{ .offset = off, .length = utf16Len(s) } });
     }
 
     pub fn italic(self: *FormattedText, s: []const u8) !void {
         const off = self.offset();
-        try self.text.appendSlice(s);
-        try self.entities.append(.{ .MessageEntityItalic = .{ .offset = off, .length = utf16Len(s) } });
+        try self.text.appendSlice(self.allocator, s);
+        try self.entities.append(self.allocator, .{ .MessageEntityItalic = .{ .offset = off, .length = utf16Len(s) } });
     }
 
     pub fn code(self: *FormattedText, s: []const u8) !void {
         const off = self.offset();
-        try self.text.appendSlice(s);
-        try self.entities.append(.{ .MessageEntityCode = .{ .offset = off, .length = utf16Len(s) } });
+        try self.text.appendSlice(self.allocator, s);
+        try self.entities.append(self.allocator, .{ .MessageEntityCode = .{ .offset = off, .length = utf16Len(s) } });
     }
 
     pub fn pre(self: *FormattedText, s: []const u8, language: []const u8) !void {
         const off = self.offset();
-        try self.text.appendSlice(s);
-        try self.entities.append(.{ .MessageEntityPre = .{ .offset = off, .length = utf16Len(s), .language = language } });
+        try self.text.appendSlice(self.allocator, s);
+        try self.entities.append(self.allocator, .{ .MessageEntityPre = .{ .offset = off, .length = utf16Len(s), .language = language } });
     }
 
     pub fn link(self: *FormattedText, s: []const u8, url: []const u8) !void {
         const off = self.offset();
-        try self.text.appendSlice(s);
-        try self.entities.append(.{ .MessageEntityTextUrl = .{ .offset = off, .length = utf16Len(s), .url = url } });
+        try self.text.appendSlice(self.allocator, s);
+        try self.entities.append(self.allocator, .{ .MessageEntityTextUrl = .{ .offset = off, .length = utf16Len(s), .url = url } });
     }
 
     pub fn underline(self: *FormattedText, s: []const u8) !void {
         const off = self.offset();
-        try self.text.appendSlice(s);
-        try self.entities.append(.{ .MessageEntityUnderline = .{ .offset = off, .length = utf16Len(s) } });
+        try self.text.appendSlice(self.allocator, s);
+        try self.entities.append(self.allocator, .{ .MessageEntityUnderline = .{ .offset = off, .length = utf16Len(s) } });
     }
 
     pub fn strike(self: *FormattedText, s: []const u8) !void {
         const off = self.offset();
-        try self.text.appendSlice(s);
-        try self.entities.append(.{ .MessageEntityStrike = .{ .offset = off, .length = utf16Len(s) } });
+        try self.text.appendSlice(self.allocator, s);
+        try self.entities.append(self.allocator, .{ .MessageEntityStrike = .{ .offset = off, .length = utf16Len(s) } });
     }
 
     pub fn spoiler(self: *FormattedText, s: []const u8) !void {
         const off = self.offset();
-        try self.text.appendSlice(s);
-        try self.entities.append(.{ .MessageEntitySpoiler = .{ .offset = off, .length = utf16Len(s) } });
+        try self.text.appendSlice(self.allocator, s);
+        try self.entities.append(self.allocator, .{ .MessageEntitySpoiler = .{ .offset = off, .length = utf16Len(s) } });
     }
 };
 

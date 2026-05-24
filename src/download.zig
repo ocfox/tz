@@ -10,8 +10,8 @@ const chunk_size: i32 = 512 * 1024;
 /// Download a file by InputFileLocation. Returns heap-allocated bytes; caller must free.
 /// FILE_MIGRATE errors are handled automatically via ctx.callFile.
 pub fn download(ctx: Context, location: types.InputFileLocation) ![]u8 {
-    var buf = std.ArrayList(u8).init(ctx.allocator);
-    errdefer buf.deinit();
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(ctx.allocator);
 
     var offset: i64 = 0;
     while (true) {
@@ -24,12 +24,12 @@ pub fn download(ctx: Context, location: types.InputFileLocation) ![]u8 {
             .UploadFile => |f| f.bytes,
             .UploadFileCdnRedirect => return error.CdnRedirectUnsupported,
         };
-        try buf.appendSlice(chunk);
+        try buf.appendSlice(ctx.allocator, chunk);
         if (chunk.len < @as(usize, @intCast(chunk_size))) break;
         offset += @intCast(chunk.len);
     }
 
-    return buf.toOwnedSlice();
+    return buf.toOwnedSlice(ctx.allocator);
 }
 
 /// Extract InputFileLocation from a Document. Returns null for empty/unknown variants.
