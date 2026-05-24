@@ -75,6 +75,15 @@ pub const Context = struct {
         return codec.decode(@TypeOf(request).Response, &r, self.allocator);
     }
 
+    /// Send a typed TL request, discard the response. No heap allocation for decoding.
+    pub fn exec(self: Context, request: anytype) !void {
+        var fba_buf: [4096]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
+        const bytes = try codec.encodeAlloc(request, fba.allocator());
+        const raw = try self.callFn(self.client, self.io, bytes);
+        self.allocator.free(raw);
+    }
+
     /// Like call but for upload RPCs: automatically follows FILE_MIGRATE to the file DC.
     /// Uses heap allocation for encoding (upload parts can be large).
     pub fn callFile(self: Context, request: anytype) !@TypeOf(request).Response {

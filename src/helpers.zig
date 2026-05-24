@@ -33,7 +33,7 @@ pub fn reply(
         else => return,
     };
     const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    _ = try ctx.call(functions.messages.SendMessage{
+    try ctx.exec(functions.messages.SendMessage{
         .peer = peer,
         .message = text,
         .entities = if (opts.entities) |e| .some(e) else .none,
@@ -60,7 +60,7 @@ pub fn sendPhoto(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         .InputFile => |f| ctx.allocator.free(f.md5_checksum),
         .InputFileBig, .InputFileStoryDocument => {},
     };
-    _ = try ctx.call(functions.messages.SendMedia{
+    try ctx.exec(functions.messages.SendMedia{
         .peer = peer,
         .media = .{ .InputMediaUploadedPhoto = .{ .file = input_file } },
         .message = opts.caption,
@@ -83,7 +83,7 @@ pub fn sendDocument(ctx: Context, update: types.UpdateNewMessage, data: []const 
         .InputFileBig, .InputFileStoryDocument => {},
     };
     var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeFilename = .{ .file_name = "file" } }};
-    _ = try ctx.call(functions.messages.SendMedia{
+    try ctx.exec(functions.messages.SendMedia{
         .peer = peer,
         .media = .{ .InputMediaUploadedDocument = .{
             .file = input_file,
@@ -123,7 +123,7 @@ pub fn sendAudio(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         .title = if (opts.title) |t| .some(t) else .none,
         .performer = if (opts.performer) |p| .some(p) else .none,
     } }};
-    _ = try ctx.call(functions.messages.SendMedia{
+    try ctx.exec(functions.messages.SendMedia{
         .peer = peer,
         .media = .{ .InputMediaUploadedDocument = .{
             .file = input_file,
@@ -165,7 +165,7 @@ pub fn sendVideo(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         .w = opts.w,
         .h = opts.h,
     } }};
-    _ = try ctx.call(functions.messages.SendMedia{
+    try ctx.exec(functions.messages.SendMedia{
         .peer = peer,
         .media = .{ .InputMediaUploadedDocument = .{
             .file = input_file,
@@ -224,7 +224,7 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
         media_items[i] = .{ .media = media, .message = item.caption };
     }
 
-    _ = try ctx.call(functions.messages.SendMultiMedia{
+    try ctx.exec(functions.messages.SendMultiMedia{
         .peer = peer,
         .multi_media = media_items,
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
@@ -243,7 +243,7 @@ pub fn forwardMessages(ctx: Context, from_peer: types.InputPeer, to_peer: types.
         _ = std.os.linux.getrandom(@as([*]u8, @ptrCast(&entropy)), 8, 0);
         r.* = entropy;
     }
-    _ = try ctx.call(functions.messages.ForwardMessages{
+    try ctx.exec(functions.messages.ForwardMessages{
         .from_peer = from_peer,
         .id = ids,
         .random_id = random_ids,
@@ -259,7 +259,7 @@ pub const PinOptions = struct {
 
 /// Pin or unpin a message by peer + message id.
 pub fn pinMessage(ctx: Context, peer: types.InputPeer, msg_id: i32, opts: PinOptions) !void {
-    _ = try ctx.call(functions.messages.UpdatePinnedMessage{
+    try ctx.exec(functions.messages.UpdatePinnedMessage{
         .peer = peer,
         .id = msg_id,
         .silent = if (opts.silent) .some({}) else .none,
@@ -292,7 +292,7 @@ pub const EditOptions = struct {
 /// Edit a message by peer + message id.
 /// At least one of text or reply_markup must be set.
 pub fn editMessage(ctx: Context, peer: types.InputPeer, msg_id: i32, opts: EditOptions) !void {
-    _ = try ctx.call(functions.messages.EditMessage{
+    try ctx.exec(functions.messages.EditMessage{
         .peer = peer,
         .id = msg_id,
         .message = if (opts.text) |t| .some(t) else .none,
@@ -309,7 +309,7 @@ pub const CallbackAnswerOptions = struct {
 
 /// Answer a button callback query (UpdateBotCallbackQuery).
 pub fn answerCallbackQuery(ctx: Context, update: types.UpdateBotCallbackQuery, opts: CallbackAnswerOptions) !void {
-    _ = try ctx.call(functions.messages.SetBotCallbackAnswer{
+    try ctx.exec(functions.messages.SetBotCallbackAnswer{
         .alert = if (opts.alert) .some({}) else .none,
         .query_id = update.query_id,
         .message = if (opts.text) |t| .some(t) else .none,
@@ -320,7 +320,7 @@ pub fn answerCallbackQuery(ctx: Context, update: types.UpdateBotCallbackQuery, o
 
 /// Answer a callback query from an inline message (UpdateInlineBotCallbackQuery).
 pub fn answerInlineCallbackQuery(ctx: Context, update: types.UpdateInlineBotCallbackQuery, opts: CallbackAnswerOptions) !void {
-    _ = try ctx.call(functions.messages.SetBotCallbackAnswer{
+    try ctx.exec(functions.messages.SetBotCallbackAnswer{
         .alert = if (opts.alert) .some({}) else .none,
         .query_id = update.query_id,
         .message = if (opts.text) |t| .some(t) else .none,
@@ -338,7 +338,7 @@ pub const InlineQueryOptions = struct {
 
 /// Answer an inline query (UpdateBotInlineQuery). Results are constructed by the caller.
 pub fn answerInlineQuery(ctx: Context, update: types.UpdateBotInlineQuery, results: []const types.InputBotInlineResult, opts: InlineQueryOptions) !void {
-    _ = try ctx.call(functions.messages.SetInlineBotResults{
+    try ctx.exec(functions.messages.SetInlineBotResults{
         .gallery = if (opts.is_gallery) .some({}) else .none,
         .private = if (opts.is_private) .some({}) else .none,
         .query_id = update.query_id,
@@ -385,7 +385,7 @@ pub fn sendVoice(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         .voice = .some({}),
         .duration = opts.duration,
     } }};
-    _ = try ctx.call(functions.messages.SendMedia{
+    try ctx.exec(functions.messages.SendMedia{
         .peer = peer,
         .media = .{ .InputMediaUploadedDocument = .{
             .file = input_file,
@@ -496,7 +496,7 @@ fn utf16Len(s: []const u8) i32 {
 /// Add an emoji reaction to a message.
 pub fn addReaction(ctx: Context, peer: types.InputPeer, msg_id: i32, emoticon: []const u8) !void {
     var reactions = [_]types.Reaction{.{ .ReactionEmoji = .{ .emoticon = emoticon } }};
-    _ = try ctx.call(functions.messages.SendReaction{
+    try ctx.exec(functions.messages.SendReaction{
         .peer = peer,
         .msg_id = msg_id,
         .reaction = .some(&reactions),
@@ -506,7 +506,7 @@ pub fn addReaction(ctx: Context, peer: types.InputPeer, msg_id: i32, emoticon: [
 /// Remove all reactions from a message.
 pub fn removeReaction(ctx: Context, peer: types.InputPeer, msg_id: i32) !void {
     var reactions = [_]types.Reaction{};
-    _ = try ctx.call(functions.messages.SendReaction{
+    try ctx.exec(functions.messages.SendReaction{
         .peer = peer,
         .msg_id = msg_id,
         .reaction = .some(&reactions),
