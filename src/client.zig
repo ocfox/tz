@@ -10,7 +10,7 @@ const functions = @import("functions");
 
 pub const HandlerEntry = struct {
     cid: u32,
-    dispatchFn: *const fn (ctx: Context, payload: []const u8) anyerror!void,
+    dispatchFn: *const fn (ctx: Context, update: types.Update) anyerror!void,
 };
 
 /// Build a HandlerEntry for a typed update.
@@ -22,10 +22,14 @@ pub fn handler(
     return .{
         .cid = UpdateType.cid,
         .dispatchFn = struct {
-            fn dispatch(ctx: Context, payload: []const u8) anyerror!void {
-                var r: std.Io.Reader = .fixed(payload);
-                const update = try codec.decode(UpdateType, &r, ctx.allocator);
-                try cb(ctx, update);
+            fn dispatch(ctx: Context, update: types.Update) anyerror!void {
+                switch (update) {
+                    inline else => |inner| {
+                        if (@TypeOf(inner) == UpdateType) {
+                            try cb(ctx, inner);
+                        }
+                    },
+                }
             }
         }.dispatch,
     };
@@ -350,11 +354,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 };
                 inline for (handlers) |entry| {
                     if (update_cid == entry.cid) {
-                        if (codec.encodeAlloc(u, self.allocator)) |encoded| {
-                            defer self.allocator.free(encoded);
-                            entry.dispatchFn(ctx, encoded) catch |err|
-                                std.log.warn("handler error: {}", .{err});
-                        } else |_| {}
+                        entry.dispatchFn(ctx, u) catch |err|
+                            std.log.warn("handler error: {}", .{err});
                     }
                 }
             }
