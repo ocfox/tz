@@ -47,8 +47,6 @@ fn onHelp(ctx: h.Context, update: tg.UpdateNewMessage) !void {
     try ft.plain(" inline keyboard\n");
     try ft.code("/document");
     try ft.plain(" send a file\n");
-    try ft.code("/album");
-    try ft.plain(" send a document album\n");
     try ft.code("/info");
     try ft.plain(" your user info\n");
     try ft.code("/react");
@@ -122,16 +120,20 @@ fn onDocument(ctx: h.Context, update: tg.UpdateNewMessage) !void {
     try h.sendDocument(ctx, update, data, "text/plain", .{ .caption = "pill.txt" });
 }
 
-fn onAlbum(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    const items = &[_]h.AlbumItem{
-        .{ .data = "first file in album\n", .caption = "one", .name = "one.txt", .kind = .document, .mime_type = "text/plain" },
-        .{ .data = "second file in album\n", .caption = "two", .name = "two.txt", .kind = .document, .mime_type = "text/plain" },
-    };
-    try h.sendAlbum(ctx, update, items, .{});
-}
-
 fn onInfo(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    var id_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
+    const msg = switch (update.message) {
+        .Message => |m| m,
+        else => return,
+    };
+    const sender_id = blk: {
+        if (msg.from_id.value) |from| {
+            if (from == .PeerUser) break :blk from.PeerUser.user_id;
+        }
+        if (msg.peer_id == .PeerUser) break :blk msg.peer_id.PeerUser.user_id;
+        return;
+    };
+    const access_hash = ctx.entities.accessHash(sender_id) orelse return;
+    var id_input = [_]tg.InputUser{.{ .InputUser = .{ .user_id = sender_id, .access_hash = access_hash } }};
     const users = try ctx.call(f.users.GetUsers{ .id = &id_input });
     defer ctx.allocator.free(users);
 
@@ -245,7 +247,6 @@ fn onMessage(ctx: h.Context, update: tg.UpdateNewMessage) !void {
         R.exact("/fmt", onFmt),
         R.exact("/keyboard", onKeyboard),
         R.exact("/document", onDocument),
-        R.exact("/album", onAlbum),
         R.exact("/info", onInfo),
         R.exact("/react", onReact),
         R.exact("/unreact", onUnreact),
