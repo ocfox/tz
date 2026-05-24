@@ -537,6 +537,41 @@ pub fn getChannels(ctx: Context, ids: []types.InputChannel) ![]types.Chat {
     };
 }
 
+/// A single command route entry. Use Cmd(U).exact / Cmd(U).prefix to construct.
+pub fn Cmd(comptime U: type) type {
+    return struct {
+        pattern: []const u8,
+        is_prefix: bool = false,
+        handler: *const fn (Context, U) anyerror!void,
+
+        const Self = @This();
+
+        pub fn exact(comptime pattern: []const u8, comptime h: fn (Context, U) anyerror!void) Self {
+            return .{ .pattern = pattern, .handler = h };
+        }
+
+        pub fn prefix(comptime pattern: []const u8, comptime h: fn (Context, U) anyerror!void) Self {
+            return .{ .pattern = pattern, .is_prefix = true, .handler = h };
+        }
+    };
+}
+
+/// Dispatch `text` against a comptime route table. Returns true if a route matched.
+/// Routes are checked in order; the first match wins.
+pub fn route(ctx: Context, update: anytype, text: []const u8, comptime routes: anytype) !bool {
+    inline for (routes) |r| {
+        const matched = if (r.is_prefix)
+            std.mem.startsWith(u8, text, r.pattern)
+        else
+            std.mem.eql(u8, text, r.pattern);
+        if (matched) {
+            try r.handler(ctx, update);
+            return true;
+        }
+    }
+    return false;
+}
+
 pub fn peerFromMessage(entities: Entities, msg: types.Message_) ?types.InputPeer {
     return switch (msg.peer_id) {
         .PeerUser => |p| .{ .InputPeerUser = .{

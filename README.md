@@ -17,6 +17,7 @@ Echo bot binary: ~518 KB (`ReleaseSmall`) / ~780KB (`ReleaseSmall`,statically li
 - Bot and user account auth
 - File upload and download (`tz.helpers.upload` / `tz.helpers.download`) with automatic cross-DC routing
 - `tz.helpers` — send photo/document/audio/video/voice/album, forward, pin, react, edit, inline keyboards, formatted text
+- Command routing — `tz.helpers.Cmd` + `tz.helpers.route` dispatch text commands to handlers with zero runtime overhead
 
 ## Usage
 
@@ -93,14 +94,14 @@ try tz.helpers.forwardMessages(ctx, from_peer, to_peer, &[_]i32{msg.id});
 try tz.helpers.pinMessage(ctx, peer, msg.id, .{});
 
 // React
-try tz.helpers.addReaction(ctx, peer, msg.id, "👍");
+try tz.helpers.addReaction(ctx, peer, msg.id, "♥️");
 try tz.helpers.removeReaction(ctx, peer, msg.id);
 
 // Formatted text with MessageEntity
 var ft = tz.helpers.FormattedText.init(allocator);
 defer ft.deinit();
-try ft.bold("Warning");
-try ft.plain(": file not found");
+try ft.bold("hello");
+try ft.plain(": tz is here");
 try tz.helpers.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });
 
 // Download
@@ -108,6 +109,28 @@ const location = tz.helpers.photoLocation(photo) orelse return;
 const bytes = try tz.helpers.download(ctx, location);
 defer allocator.free(bytes);
 ```
+
+**Command routing** — dispatch text commands without a chain of `if` checks:
+
+```zig
+const h = tz.helpers;
+const R = h.Cmd(tg.UpdateNewMessage);
+
+fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
+    const msg = switch (update.message) { .Message => |m| m, else => return };
+
+    if (try h.route(ctx, update, msg.message, &.{
+        R.exact("/start", onStart),
+        R.exact("/help",  onStart),   // multiple commands → same handler
+        R.prefix("/echo ", onEcho),   // prefix match; handler receives the full update
+        R.exact("/stats", onStats),
+    })) return;
+
+    // fallback: handle non-command messages here
+}
+```
+
+`R.exact` matches the full text; `R.prefix` matches the beginning. Routes are checked in order and the first match wins. `route` returns `true` if a handler was called.
 
 See [examples/](examples/) for complete runnable examples.
 
