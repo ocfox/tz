@@ -1,3 +1,4 @@
+const std = @import("std");
 const types = @import("types");
 const functions = @import("functions");
 const client_mod = @import("client.zig");
@@ -8,6 +9,7 @@ pub const Entities = client_mod.Entities;
 
 pub const ReplyOptions = struct {
     reply_to: ?i32 = null,
+    entities: ?[]types.MessageEntity = null,
 };
 
 /// Reply to a message in a private chat, group, or channel.
@@ -27,6 +29,7 @@ pub fn reply(
     _ = try ctx.call(functions.messages.SendMessage{
         .peer = peer,
         .message = text,
+        .entities = if (opts.entities) |e| .some(e) else .none,
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
             .reply_to_msg_id = id,
         } }) else .none,
@@ -336,6 +339,136 @@ pub fn peerFromCallbackQuery(entities: Entities, update: types.UpdateBotCallback
             .access_hash = entities.channelAccessHash(p.channel_id) orelse return null,
         } },
     };
+}
+
+pub const VoiceOptions = struct {
+    caption: []const u8 = "",
+    reply_to: ?i32 = null,
+    duration: i32 = 0,
+    name: []const u8 = "voice.ogg",
+};
+
+/// Upload raw bytes as a voice message (audio/ogg with voice flag) and send it.
+pub fn sendVoice(ctx: Context, update: types.UpdateNewMessage, data: []const u8, opts: VoiceOptions) !void {
+    const msg = switch (update.message) {
+        .Message => |m| m,
+        else => return,
+    };
+    const peer = peerFromMessage(ctx.entities, msg) orelse return;
+    const input_file = try upload_mod.upload(ctx, data, .{ .name = opts.name });
+    defer switch (input_file) {
+        .InputFile => |f| ctx.allocator.free(f.md5_checksum),
+        .InputFileBig => {},
+    };
+    var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeAudio = .{
+        .voice = .some({}),
+        .duration = opts.duration,
+    } }};
+    _ = try ctx.call(functions.messages.SendMedia{
+        .peer = peer,
+        .media = .{ .InputMediaUploadedDocument = .{
+            .file = input_file,
+            .mime_type = "audio/ogg",
+            .attributes = &attrs,
+        } },
+        .message = opts.caption,
+        .random_id = client_mod.nextRandomId(),
+        .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{
+            .reply_to_msg_id = id,
+        } }) else .none,
+    });
+}
+
+/// Builder for formatted text with MessageEntity annotations.
+/// Telegram offsets are counted in UTF-16 code units.
+///
+/// Example:
+///   var ft = FormattedText.init(allocator);
+///   defer ft.deinit();
+///   try ft.bold("Error");
+///   try ft.plain(": file not found");
+///   try tz.helpers.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });
+pub const FormattedText = struct {
+    text: std.ArrayList(u8),
+    entities: std.ArrayList(types.MessageEntity),
+
+    pub fn init(allocator: std.mem.Allocator) FormattedText {
+        return .{
+            .text = std.ArrayList(u8).init(allocator),
+            .entities = std.ArrayList(types.MessageEntity).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *FormattedText) void {
+        self.text.deinit();
+        self.entities.deinit();
+    }
+
+    fn offset(self: *const FormattedText) i32 {
+        return utf16Len(self.text.items);
+    }
+
+    pub fn plain(self: *FormattedText, s: []const u8) !void {
+        try self.text.appendSlice(s);
+    }
+
+    pub fn bold(self: *FormattedText, s: []const u8) !void {
+        const off = self.offset();
+        try self.text.appendSlice(s);
+        try self.entities.append(.{ .MessageEntityBold = .{ .offset = off, .length = utf16Len(s) } });
+    }
+
+    pub fn italic(self: *FormattedText, s: []const u8) !void {
+        const off = self.offset();
+        try self.text.appendSlice(s);
+        try self.entities.append(.{ .MessageEntityItalic = .{ .offset = off, .length = utf16Len(s) } });
+    }
+
+    pub fn code(self: *FormattedText, s: []const u8) !void {
+        const off = self.offset();
+        try self.text.appendSlice(s);
+        try self.entities.append(.{ .MessageEntityCode = .{ .offset = off, .length = utf16Len(s) } });
+    }
+
+    pub fn pre(self: *FormattedText, s: []const u8, language: []const u8) !void {
+        const off = self.offset();
+        try self.text.appendSlice(s);
+        try self.entities.append(.{ .MessageEntityPre = .{ .offset = off, .length = utf16Len(s), .language = language } });
+    }
+
+    pub fn link(self: *FormattedText, s: []const u8, url: []const u8) !void {
+        const off = self.offset();
+        try self.text.appendSlice(s);
+        try self.entities.append(.{ .MessageEntityTextUrl = .{ .offset = off, .length = utf16Len(s), .url = url } });
+    }
+
+    pub fn underline(self: *FormattedText, s: []const u8) !void {
+        const off = self.offset();
+        try self.text.appendSlice(s);
+        try self.entities.append(.{ .MessageEntityUnderline = .{ .offset = off, .length = utf16Len(s) } });
+    }
+
+    pub fn strike(self: *FormattedText, s: []const u8) !void {
+        const off = self.offset();
+        try self.text.appendSlice(s);
+        try self.entities.append(.{ .MessageEntityStrike = .{ .offset = off, .length = utf16Len(s) } });
+    }
+
+    pub fn spoiler(self: *FormattedText, s: []const u8) !void {
+        const off = self.offset();
+        try self.text.appendSlice(s);
+        try self.entities.append(.{ .MessageEntitySpoiler = .{ .offset = off, .length = utf16Len(s) } });
+    }
+};
+
+fn utf16Len(s: []const u8) i32 {
+    var len: i32 = 0;
+    const view = std.unicode.Utf8View.initUnchecked(s);
+    var it = view.iterator();
+    while (it.nextCodepoint()) |cp| {
+        len += if (cp >= 0x10000) 2 else 1;
+    }
+    return len;
 }
 
 pub fn peerFromMessage(entities: Entities, msg: types.Message_) ?types.InputPeer {
