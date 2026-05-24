@@ -24,7 +24,6 @@ pub const session = struct {
     pub const storage = @import("session/storage.zig");
     pub const message = @import("session/message.zig");
     pub const auth_key = @import("session/auth_key.zig");
-    pub const auth = @import("session/auth.zig");
 };
 pub const mtproto = @import("mtproto.zig");
 pub const connector = connector_mod;

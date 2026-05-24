@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const ws = @import("ws.zig");
 
 pub const Mode = enum { abridged, intermediate, padded };
 
@@ -79,5 +80,22 @@ pub const TcpTransport = struct {
         errdefer allocator.free(payload);
         try r.readSliceAll(payload);
         return payload;
+    }
+};
+
+pub const AnyTransport = union(enum) {
+    tcp: TcpTransport,
+    ws: ws.WsTransport,
+
+    pub fn readFrame(self: *AnyTransport, io: Io, allocator: Allocator) ![]u8 {
+        return switch (self.*) {
+            inline else => |*t| t.readFrame(io, allocator),
+        };
+    }
+
+    pub fn writeFrame(self: *AnyTransport, io: Io, data: []const u8) !void {
+        return switch (self.*) {
+            inline else => |*t| t.writeFrame(io, data),
+        };
     }
 };

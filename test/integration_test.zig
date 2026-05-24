@@ -12,7 +12,7 @@ test "auth key exchange — Telegram test DC2" {
     // Telegram test server DC2
     const addr = std.Io.net.IpAddress.parseIp4("149.154.167.40", 443) catch unreachable;
     const stream = try addr.connect(io, .{ .mode = .stream });
-    var transport = tz.transport.tcp.TcpTransport.init(stream, .abridged);
+    var transport = tz.transport.tcp.AnyTransport{ .tcp = tz.transport.tcp.TcpTransport.init(stream, .abridged) };
 
     const result = try tz.session.auth_key.perform(&transport, io, std.testing.allocator);
 

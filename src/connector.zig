@@ -2,6 +2,7 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const tcp = @import("transport/tcp.zig");
+const ws_mod = @import("transport/ws.zig");
 const session_mod = @import("session/message.zig");
 const storage_mod = @import("session/storage.zig");
 const auth_key_mod = @import("session/auth_key.zig");
@@ -80,12 +81,17 @@ pub const Connector = struct {
 
     pub fn connect(io: Io, allocator: Allocator, opts: ConnectOptions) !*Connector {
         const stream = try opts.dc.addr.connect(io, .{ .mode = .stream });
-        var transport = tcp.TcpTransport.init(stream, switch (opts.transport) {
-            .tcp_abridged => .abridged,
-            .tcp_intermediate => .intermediate,
-            .tcp_padded => .padded,
-            .websocket => .abridged,
-        });
+        var transport: tcp.AnyTransport = switch (opts.transport) {
+            .tcp_abridged => .{ .tcp = tcp.TcpTransport.init(stream, .abridged) },
+            .tcp_intermediate => .{ .tcp = tcp.TcpTransport.init(stream, .intermediate) },
+            .tcp_padded => .{ .tcp = tcp.TcpTransport.init(stream, .padded) },
+            .websocket => blk: {
+                var host_buf: [64]u8 = undefined;
+                const addr_str = std.fmt.bufPrint(&host_buf, "{}", .{opts.dc.addr}) catch "core.telegram.org";
+                const host = if (std.mem.lastIndexOfScalar(u8, addr_str, ':')) |i| addr_str[0..i] else addr_str;
+                break :blk .{ .ws = try ws_mod.WsTransport.connect(stream, io, host, allocator) };
+            },
+        };
 
         const auth_key_result = blk: {
             if (try opts.session_storage.load(io, allocator)) |saved| {
