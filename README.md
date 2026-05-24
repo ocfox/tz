@@ -18,13 +18,10 @@ Echo bot binary: ~518 KB (`ReleaseSmall`).
 
 ## Usage
 
-```zig
-const std = @import("std");
-const tz = @import("tz");
-const tg = tz.types;
+**Handle an update.** `UpdateNewMessage.message` is a union — switch to get the concrete `Message`:
 
+```zig
 fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    // UpdateNewMessage.message is a union — switch to get the concrete Message.
     const msg = switch (update.message) {
         .Message => |m| m,
         else => return,
@@ -32,35 +29,47 @@ fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
     if (msg.message.len == 0) return;
     try tz.helpers.reply(ctx, update, msg.message, .{});
 }
-
-const handlers = &.{
-    tz.handler(tg.UpdateNewMessage, onMessage),
-};
-
-pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded = std.Io.Threaded.init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
-
-    var storage = tz.FileStorage.init("bot.session");
-
-    const client = try tz.Client(handlers).init(allocator, .{
-        .api_id    = api_id,     // https://core.telegram.org/api/obtaining_api_id
-        .api_hash  = api_hash,
-        .bot_token = bot_token,
-        .storage   = storage.storage(),
-    });
-    defer client.deinit();
-
-    try client.run(io);
-}
 ```
 
-See [examples](examples/) for runnable examples.
+**Call any TL function directly** via `ctx.call`:
+
+```zig
+// read: inspect the returned value
+var id_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
+const users = try ctx.call(f.users.GetUsers{ .id = &id_input });
+defer ctx.allocator.free(users);
+
+// mutate: discard the response
+var ids = [_]i32{msg.id};
+_ = try ctx.call(f.messages.DeleteMessages{ .flags = .{}, .id = &ids });
+```
+
+**Register handlers** — multiple handlers on the same type are zero-overhead (comptime dispatch):
+
+```zig
+const handlers = &.{
+    tz.handler(tg.UpdateNewMessage, onCommand),
+    tz.handler(tg.UpdateNewMessage, onEcho),
+};
+```
+
+**Boot the client:**
+
+```zig
+var storage = tz.FileStorage.init("bot.session");
+
+const client = try tz.Client(handlers).init(allocator, .{
+    .api_id    = api_id,
+    .api_hash  = api_hash,
+    .bot_token = bot_token,
+    .storage   = storage.storage(),
+});
+defer client.deinit();
+
+try client.run(io);
+```
+
+See [examples/](examples/) for complete runnable examples.
 
 ## Dependency
 
