@@ -25,6 +25,7 @@ pub fn download(ctx: Context, location: types.InputFileLocation) ![]u8 {
             .UploadFile => |f| f.bytes,
             .UploadFileCdnRedirect => return error.CdnRedirectUnsupported,
         };
+        defer ctx.allocator.free(chunk);
         std.log.debug("download: got {} bytes", .{chunk.len});
         try buf.appendSlice(ctx.allocator, chunk);
         if (chunk.len < @as(usize, @intCast(chunk_size))) break;

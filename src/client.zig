@@ -487,13 +487,12 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         fn dispatchUpdates(self: *Self, io: Io, payload: []const u8) !void {
             if (handlers.len == 0) return;
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const arena_alloc = arena.allocator();
+
             var r: std.Io.Reader = .fixed(payload[4..]);
-            const upd = try codec.decodeStructBody(types.Updates_, &r, self.allocator);
-            defer {
-                self.allocator.free(upd.updates);
-                self.allocator.free(upd.users);
-                self.allocator.free(upd.chats);
-            }
+            const upd = try codec.decodeStructBody(types.Updates_, &r, arena_alloc);
 
             var entities: Entities = .{};
             defer entities.deinit(self.allocator);
