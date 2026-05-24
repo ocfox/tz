@@ -278,7 +278,10 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             errdefer sub.connector.deinit();
             // run() before transferAuth: loops must be running so mtp.call can complete.
             try sub.connector.run(io2, sub_conn_noop_handler);
-            errdefer { sub.connector.close(io2); sub.connector.join(io2); }
+            errdefer {
+                sub.connector.close(io2);
+                sub.connector.join(io2);
+            }
             try self.transferAuth(io2, sub.connector, dc_id);
 
             // Insert under lock. Handle the race where another coroutine beat us here.
