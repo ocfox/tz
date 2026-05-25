@@ -28,7 +28,7 @@ pub const SessionStorage = struct {
 };
 
 pub const MemoryStorage = struct {
-    slots: [8]?SessionData = .{null} ** 8,
+    slots: [6]?SessionData = .{null} ** 6,
 
     pub fn storage(self: *MemoryStorage) SessionStorage {
         return .{ .ptr = self, .vtable = &vtable };
