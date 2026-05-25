@@ -211,7 +211,7 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
     for (items, 0..) |item, i| {
         const input_file = try upload_mod.upload(ctx, item.data, .{ .name = item.name });
         if (input_file == .InputFile) checksums[i] = input_file.InputFile.md5_checksum;
-        const media: types.InputMedia = switch (item.kind) {
+        const uploaded: types.InputMedia = switch (item.kind) {
             .photo => .{ .InputMediaUploadedPhoto = .{ .file = input_file } },
             .document => blk: {
                 attrs_buf[i] = .{ .DocumentAttributeFilename = .{ .file_name = item.name } };
@@ -221,6 +221,34 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
                     .attributes = attrs_buf[i .. i + 1],
                 } };
             },
+        };
+        // SendMultiMedia rejects InputMediaUploaded* directly — must stage via
+        // uploadMedia first, then reference the server-assigned id.
+        const staged = try ctx.call(functions.messages.UploadMedia{ .peer = peer, .media = uploaded });
+        const media: types.InputMedia = switch (staged) {
+            .MessageMediaPhoto => |m| blk: {
+                const p = switch (m.photo.value orelse return error.NoPhoto) {
+                    .Photo => |p| p,
+                    else => return error.NoPhoto,
+                };
+                break :blk .{ .InputMediaPhoto = .{ .id = .{ .InputPhoto = .{
+                    .id = p.id,
+                    .access_hash = p.access_hash,
+                    .file_reference = p.file_reference,
+                } } } };
+            },
+            .MessageMediaDocument => |m| blk: {
+                const d = switch (m.document.value orelse return error.NoDocument) {
+                    .Document => |d| d,
+                    else => return error.NoDocument,
+                };
+                break :blk .{ .InputMediaDocument = .{ .id = .{ .InputDocument = .{
+                    .id = d.id,
+                    .access_hash = d.access_hash,
+                    .file_reference = d.file_reference,
+                } } } };
+            },
+            else => return error.UnexpectedMediaType,
         };
         var rand_id: i64 = undefined;
         ctx.io.random(std.mem.asBytes(&rand_id));
