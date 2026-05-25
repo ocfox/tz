@@ -16,11 +16,9 @@ pub const DhResult = struct {
 pub fn compute(
     params: DhParams,
     g_a: *const [256]u8, // server's g^a mod p
+    b_bytes: *const [256]u8, // caller-provided random exponent
     allocator: Allocator,
 ) !DhResult {
-    var b_bytes: [256]u8 = undefined;
-    _ = std.os.linux.getrandom(&b_bytes, b_bytes.len, 0);
-
     var b = try Managed.init(allocator);
     defer b.deinit();
     var g_val = try Managed.initSet(allocator, params.g);
@@ -34,7 +32,7 @@ pub fn compute(
     var secret = try Managed.init(allocator);
     defer secret.deinit();
 
-    try rsa.setFromBigEndianBytes(&b, &b_bytes, allocator);
+    try rsa.setFromBigEndianBytes(&b, b_bytes, allocator);
     try rsa.setFromBigEndianBytes(&p, &params.dh_prime, allocator);
     try rsa.setFromBigEndianBytes(&ga, g_a, allocator);
 
@@ -60,7 +58,10 @@ test "dh compute produces valid g_b" {
     var g_a: [256]u8 = undefined;
     @memset(&g_a, 0);
     g_a[255] = 8;
-    const result = try compute(params, &g_a, allocator);
+    var b_bytes: [256]u8 = undefined;
+    @memset(&b_bytes, 0);
+    b_bytes[255] = 7; // fixed test exponent
+    const result = try compute(params, &g_a, &b_bytes, allocator);
     // g_b should be non-zero
     var all_zero = true;
     for (result.g_b) |byte| if (byte != 0) {

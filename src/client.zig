@@ -132,7 +132,6 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         sub_conns_mu: std.Io.Mutex = std.Io.Mutex.init,
 
         pub fn init(allocator: Allocator, opts: ClientOptions) !*Self {
-            initRandomCounter();
             const c = try allocator.create(Self);
             c.* = .{ .allocator = allocator, .opts = opts };
             return c;
@@ -149,6 +148,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         /// Blocks until close() is called. Reconnects automatically on disconnect.
         pub fn run(self: *Self, io: Io) !void {
+            try initRandomCounter(io);
             var backoff_ms: u64 = 100;
             while (!self.closed) {
                 self.runOnce(io) catch |err| {
@@ -537,11 +537,13 @@ pub fn nextRandomId() i64 {
     return random_counter.fetchAdd(1, .monotonic);
 }
 
-fn initRandomCounter() void {
+fn initRandomCounter(io: Io) !void {
     var seed: [32]u8 = undefined;
-    _ = std.os.linux.getrandom(&seed, seed.len, 0);
+    try io.randomSecure(&seed);
     var csprng = std.Random.DefaultCsprng.init(seed);
-    random_counter.store(csprng.random().int(i64), .monotonic);
+    const val = csprng.random().int(i64);
+    random_counter.store(val, .monotonic);
+    codec.initRandom(val);
 }
 
 const layer: i32 = 225;

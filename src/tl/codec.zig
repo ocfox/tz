@@ -5,6 +5,16 @@ const de = @import("deserialize.zig");
 pub const serialize = @import("serialize.zig");
 pub const deserialize = @import("deserialize.zig");
 
+var random_id_counter = std.atomic.Value(i64).init(0);
+
+pub fn initRandom(seed: i64) void {
+    random_id_counter.store(seed, .monotonic);
+}
+
+fn nextRandomId() i64 {
+    return random_id_counter.fetchAdd(1, .monotonic);
+}
+
 pub const Flags = struct {};
 pub const Flags2 = struct {};
 
@@ -150,12 +160,7 @@ fn encodeStructBodyWriter(comptime T: type, value: T, w: *std.Io.Writer) !void {
             }
         } else {
             if (comptime std.mem.eql(u8, field.name, "random_id") and field.type == i64) {
-                try encodeWriter(i64, if (fv == 0) blk: {
-                    // SAFETY: getrandom fills all 8 bytes before entropy is read
-                    var entropy: i64 = undefined;
-                    _ = std.os.linux.getrandom(@as([*]u8, @ptrCast(&entropy)), 8, 0);
-                    break :blk entropy;
-                } else fv, w);
+                try encodeWriter(i64, if (fv == 0) nextRandomId() else fv, w);
             } else {
                 try encodeWriter(field.type, fv, w);
             }
@@ -283,12 +288,7 @@ fn encodeStructBody(comptime T: type, value: T, buf: *std.ArrayListUnmanaged(u8)
             }
         } else {
             if (comptime std.mem.eql(u8, field.name, "random_id") and field.type == i64) {
-                try encodeInto(if (fv == 0) blk: {
-                    // SAFETY: getrandom fills all 8 bytes before entropy is read
-                    var entropy: i64 = undefined;
-                    _ = std.os.linux.getrandom(@as([*]u8, @ptrCast(&entropy)), 8, 0);
-                    break :blk entropy;
-                } else fv, buf, allocator);
+                try encodeInto(if (fv == 0) nextRandomId() else fv, buf, allocator);
             } else {
                 try encodeInto(fv, buf, allocator);
             }

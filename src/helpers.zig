@@ -223,7 +223,7 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
             },
         };
         var rand_id: i64 = undefined;
-        _ = std.os.linux.getrandom(@as([*]u8, @ptrCast(&rand_id)), 8, 0);
+        ctx.io.random(std.mem.asBytes(&rand_id));
         media_items[i] = .{ .media = media, .message = item.caption, .random_id = rand_id };
     }
 
@@ -240,12 +240,7 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
 pub fn forwardMessages(ctx: Context, from_peer: types.InputPeer, to_peer: types.InputPeer, ids: []i32) !void {
     const random_ids = try ctx.allocator.alloc(i64, ids.len);
     defer ctx.allocator.free(random_ids);
-    for (random_ids) |*r| {
-        // SAFETY: getrandom fills all 8 bytes before entropy is read
-        var entropy: i64 = undefined;
-        _ = std.os.linux.getrandom(@as([*]u8, @ptrCast(&entropy)), 8, 0);
-        r.* = entropy;
-    }
+    for (random_ids) |*r| ctx.io.random(std.mem.asBytes(r));
     try ctx.exec(functions.messages.ForwardMessages{
         .from_peer = from_peer,
         .id = ids,

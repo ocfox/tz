@@ -217,7 +217,9 @@ pub fn perform(transport: *tcp.AnyTransport, io: Io, allocator: Allocator) !Auth
     @memset(&g_a, 0);
     if (dh_prime_bytes.len <= 256) @memcpy(dh_prime[256 - dh_prime_bytes.len ..], dh_prime_bytes);
     if (g_a_bytes.len <= 256) @memcpy(g_a[256 - g_a_bytes.len ..], g_a_bytes);
-    const dh_result = try dh.compute(.{ .dh_prime = dh_prime, .g = dh_g }, &g_a, allocator);
+    var b_bytes: [256]u8 = undefined;
+    io.random(&b_bytes);
+    const dh_result = try dh.compute(.{ .dh_prime = dh_prime, .g = dh_g }, &g_a, &b_bytes, allocator);
 
     // Step 8: set_client_DH_params
     var ci_data_buf: [320]u8 = undefined;
