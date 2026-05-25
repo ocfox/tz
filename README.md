@@ -1,66 +1,25 @@
 # tz
 
-Work in progress — rough edges, missing features, API may change.
+telegram mtproto client in zig 0.16. wip.
 
-Telegram MTProto API client in Zig, requires Zig 0.16.
+echo bot: ~700kb statically linked (`ReleaseSmall`).
 
-Echo bot binary ~700KB (`ReleaseSmall`,statically linked)
+implements: mtproto 2.0, tcp/websocket transports, tl codegen from schema, comptime handler dispatch, bot/user auth, file upload/download, session persistence.
 
-## Features
-
-- MTProto 2.0 authentication key exchange
-- Encrypted session with server salt auto-renewal
-- TCP and WebSocket transports
-- TL schema codegen — types and functions generated from `schema/*.tl` at build time
-- Comptime handler dispatch — register handlers per update type, zero runtime overhead
-- `FileStorage` / `MemoryStorage` for session persistence
-- Bot and user account auth
-- File upload and download (`tz.helpers.upload` / `tz.helpers.download`) with automatic cross-DC routing
-- `tz.helpers` — send photo/document/audio/video/voice/album, forward, pin, react, edit, inline keyboards, formatted text
-- Command routing — `tz.helpers.Cmd` + `tz.helpers.route` dispatch text commands to handlers with zero runtime overhead
-
-## Usage
-
-**Handle an update.** `UpdateNewMessage.message` is a union — switch to get the concrete `Message`:
+## usage
 
 ```zig
 fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    if (msg.message.len == 0) return;
+    const msg = switch (update.message) { .Message => |m| m, else => return };
     try tz.helpers.reply(ctx, update, msg.message, .{});
 }
-```
 
-**Call any TL function directly** via `ctx.call`:
-
-```zig
-// read: inspect the returned value
-var id_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
-const users = try ctx.call(f.users.GetUsers{ .id = &id_input });
-defer ctx.allocator.free(users);
-
-// mutate: discard the response
-var ids = [_]i32{msg.id};
-_ = try ctx.call(f.messages.DeleteMessages{ .id = &ids });
-```
-
-**Register handlers** — multiple handlers on the same type are zero-overhead (comptime dispatch):
-
-```zig
 const handlers = &.{
-    tz.handler(tg.UpdateNewMessage, onCommand),
-    tz.handler(tg.UpdateNewMessage, onEcho),
+    tz.handler(tg.UpdateNewMessage, onMessage),
 };
-```
 
-**Boot the client:**
-
-```zig
+// boot
 var storage = tz.FileStorage.init("bot.session");
-
 const client = try tz.Client(handlers).init(allocator, .{
     .api_id    = api_id,
     .api_hash  = api_hash,
@@ -68,81 +27,52 @@ const client = try tz.Client(handlers).init(allocator, .{
     .storage   = storage.storage(),
 });
 defer client.deinit();
-
 try client.run(io);
 ```
 
-**`tz.helpers` shortcuts** — common operations without manual TL construction:
+call any tl function:
 
 ```zig
-// Send media
+var id_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
+const users = try ctx.call(f.users.GetUsers{ .id = &id_input });
+defer ctx.allocator.free(users);
+```
+
+helpers:
+
+```zig
 try tz.helpers.sendPhoto(ctx, update, jpeg_bytes, .{});
 try tz.helpers.sendDocument(ctx, update, pdf_bytes, "application/pdf", .{ .caption = "report" });
 try tz.helpers.sendAudio(ctx, update, mp3_bytes, "audio/mpeg", .{ .title = "Track", .performer = "Artist" });
 try tz.helpers.sendVideo(ctx, update, mp4_bytes, "video/mp4", .{});
 try tz.helpers.sendVoice(ctx, update, ogg_bytes, .{});
-
-// Album (multi-media)
-const items = &[_]tz.helpers.AlbumItem{
-    .{ .data = img1, .caption = "first" },
-    .{ .data = img2 },
-};
-try tz.helpers.sendAlbum(ctx, update, items, .{});
-
-// Forward / pin
 try tz.helpers.forwardMessages(ctx, from_peer, to_peer, &[_]i32{msg.id});
 try tz.helpers.pinMessage(ctx, peer, msg.id, .{});
-
-// React
 try tz.helpers.addReaction(ctx, peer, msg.id, "❤");
-try tz.helpers.removeReaction(ctx, peer, msg.id);
 
-// Formatted text with MessageEntity
 var ft = tz.helpers.FormattedText.init(allocator);
 defer ft.deinit();
-try ft.bold("hello");
-try ft.plain(": tz is here");
+try ft.bold("hello"); try ft.plain(" world");
 try tz.helpers.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });
 
-// Download
-const location = tz.helpers.photoLocation(photo) orelse return;
-const bytes = try tz.helpers.download(ctx, location);
+const bytes = try tz.helpers.download(ctx, tz.helpers.photoLocation(photo).?);
 defer allocator.free(bytes);
 ```
 
-**Command routing** — dispatch text commands without a chain of `if` checks:
+command routing:
 
 ```zig
-const h = tz.helpers;
-const R = h.Cmd(tg.UpdateNewMessage);
-
-fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = switch (update.message) { .Message => |m| m, else => return };
-
-    if (try h.route(ctx, update, msg.message, &.{
-        R.exact("/start", onStart),
-        R.exact("/help",  onStart),   // multiple commands → same handler
-        R.prefix("/echo ", onEcho),   // prefix match; handler receives the full update
-        R.exact("/stats", onStats),
-    })) return;
-
-    // fallback: handle non-command messages here
-}
+const R = tz.helpers.Cmd(tg.UpdateNewMessage);
+if (try tz.helpers.route(ctx, update, msg.message, &.{
+    R.exact("/start", onStart),
+    R.prefix("/echo ", onEcho),
+})) return;
 ```
 
-`R.exact` matches the full text; `R.prefix` matches the beginning. Routes are checked in order and the first match wins. `route` returns `true` if a handler was called.
+see [examples/](examples/).
 
-See [examples/](examples/) for complete runnable examples.
-
-## Dependency
+## dep
 
 ```sh
 zig fetch --save https://github.com/ocfox/tz/archive/master.tar.gz
-```
-
-Then in `build.zig`:
-
-```zig
-const tz = b.dependency("tz", .{});
-exe.root_module.addImport("tz", tz.module("tz"));
 ```
