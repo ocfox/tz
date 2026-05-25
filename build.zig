@@ -84,9 +84,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "tz", .module = mod }},
         }),
     });
-    const run_echo_bot = b.addRunArtifact(echo_bot);
-    if (b.args) |args| run_echo_bot.addArgs(args);
-    b.step("echo-bot", "Run echo_bot example").dependOn(&run_echo_bot.step);
+    b.step("echo-bot", "Build echo_bot example").dependOn(&b.addInstallArtifact(echo_bot, .{}).step);
 
     const any_call = b.addExecutable(.{
         .name = "any_call",
@@ -97,9 +95,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "tz", .module = mod }},
         }),
     });
-    const run_any_call = b.addRunArtifact(any_call);
-    if (b.args) |args| run_any_call.addArgs(args);
-    b.step("any-call", "Run any_call example").dependOn(&run_any_call.step);
+    b.step("any-call", "Build any_call example").dependOn(&b.addInstallArtifact(any_call, .{}).step);
 
     const user_login = b.addExecutable(.{
         .name = "user_login",
@@ -113,9 +109,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    const run_user_login = b.addRunArtifact(user_login);
-    if (b.args) |args| run_user_login.addArgs(args);
-    b.step("user-login", "Run user_login example").dependOn(&run_user_login.step);
+    b.step("user-login", "Build user_login example").dependOn(&b.addInstallArtifact(user_login, .{}).step);
 
     const feature_demo = b.addExecutable(.{
         .name = "feature_demo",
@@ -126,9 +120,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "tz", .module = mod }},
         }),
     });
-    const run_feature_demo = b.addRunArtifact(feature_demo);
-    if (b.args) |args| run_feature_demo.addArgs(args);
-    b.step("feature-demo", "Run feature_demo example").dependOn(&run_feature_demo.step);
+    b.step("feature-demo", "Build feature_demo example").dependOn(&b.addInstallArtifact(feature_demo, .{}).step);
 
     // update-schema
     const update_schema = b.step("update-schema", "Fetch latest TL schemas from tdesktop");
