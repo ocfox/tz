@@ -585,3 +585,71 @@ pub fn peerFromMessage(entities: Entities, msg: types.Message_) ?types.InputPeer
         } },
     };
 }
+
+test "utf16Len" {
+    try std.testing.expectEqual(@as(i32, 0), utf16Len(""));
+    try std.testing.expectEqual(@as(i32, 5), utf16Len("hello"));
+    try std.testing.expectEqual(@as(i32, 2), utf16Len("中文")); // U+4E2D U+6587, both BMP
+    try std.testing.expectEqual(@as(i32, 2), utf16Len("😀")); // U+1F600, surrogate pair
+    try std.testing.expectEqual(@as(i32, 4), utf16Len("hi😀")); // 2 ascii + 2 surrogate
+}
+
+test "FormattedText entity offsets" {
+    const a = std.testing.allocator;
+    var ft = FormattedText.init(a);
+    defer ft.deinit();
+
+    try ft.plain("hello ");
+    try ft.bold("world");
+
+    try std.testing.expectEqualStrings("hello world", ft.text.items);
+    try std.testing.expectEqual(@as(usize, 1), ft.entities.items.len);
+    const e = switch (ft.entities.items[0]) {
+        .MessageEntityBold => |b| b,
+        else => return error.WrongEntityType,
+    };
+    try std.testing.expectEqual(@as(i32, 6), e.offset);
+    try std.testing.expectEqual(@as(i32, 5), e.length);
+}
+
+test "FormattedText emoji offset" {
+    const a = std.testing.allocator;
+    var ft = FormattedText.init(a);
+    defer ft.deinit();
+
+    try ft.plain("😀"); // 2 UTF-16 units
+    try ft.bold("hi");
+
+    try std.testing.expectEqual(@as(usize, 1), ft.entities.items.len);
+    const e = switch (ft.entities.items[0]) {
+        .MessageEntityBold => |b| b,
+        else => return error.WrongEntityType,
+    };
+    try std.testing.expectEqual(@as(i32, 2), e.offset);
+    try std.testing.expectEqual(@as(i32, 2), e.length);
+}
+
+test "FormattedText multiple entities" {
+    const a = std.testing.allocator;
+    var ft = FormattedText.init(a);
+    defer ft.deinit();
+
+    try ft.bold("a");
+    try ft.plain("b");
+    try ft.italic("c");
+
+    try std.testing.expectEqualStrings("abc", ft.text.items);
+    try std.testing.expectEqual(@as(usize, 2), ft.entities.items.len);
+    const bold = switch (ft.entities.items[0]) {
+        .MessageEntityBold => |b| b,
+        else => return error.WrongEntityType,
+    };
+    const italic = switch (ft.entities.items[1]) {
+        .MessageEntityItalic => |b| b,
+        else => return error.WrongEntityType,
+    };
+    try std.testing.expectEqual(@as(i32, 0), bold.offset);
+    try std.testing.expectEqual(@as(i32, 1), bold.length);
+    try std.testing.expectEqual(@as(i32, 2), italic.offset);
+    try std.testing.expectEqual(@as(i32, 1), italic.length);
+}
