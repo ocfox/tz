@@ -119,19 +119,16 @@ fn encodeStructBodyWriter(comptime T: type, value: T, w: *std.Io.Writer) !void {
     }
 }
 
-fn encodeUnionWriter(comptime T: type, value: T, w: *std.Io.Writer) !void {
-    const tag = std.meta.activeTag(value);
-    inline for (std.meta.fields(T)) |field| {
-        if (std.mem.eql(u8, field.name, @tagName(tag))) {
-            const variant = @field(value, field.name);
-            const VT = field.type;
+fn encodeUnionWriter(comptime T: type, value: T, w: *std.Io.Writer) anyerror!void {
+    switch (value) {
+        inline else => |variant| {
+            const VT = @TypeOf(variant);
             const is_ptr = @typeInfo(VT) == .pointer;
             const BT = if (is_ptr) std.meta.Child(VT) else VT;
             const body = if (is_ptr) variant.* else variant;
             if (@hasDecl(BT, "cid")) try w.writeInt(u32, BT.cid, .little);
             if (BT != void) try encodeStructBodyWriter(BT, body, w);
-            return;
-        }
+        },
     }
 }
 
@@ -244,11 +241,9 @@ fn encodeStructBodyInto(comptime T: type, value: T, buf: *std.ArrayListUnmanaged
 }
 
 fn encodeUnionInto(comptime T: type, value: T, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) !void {
-    const tag = std.meta.activeTag(value);
-    inline for (std.meta.fields(T)) |field| {
-        if (std.mem.eql(u8, field.name, @tagName(tag))) {
-            const variant = @field(value, field.name);
-            const VT = field.type;
+    switch (value) {
+        inline else => |variant| {
+            const VT = @TypeOf(variant);
             const is_ptr = @typeInfo(VT) == .pointer;
             const BT = if (is_ptr) std.meta.Child(VT) else VT;
             const body = if (is_ptr) variant.* else variant;
@@ -258,7 +253,6 @@ fn encodeUnionInto(comptime T: type, value: T, buf: *std.ArrayListUnmanaged(u8),
                 std.mem.writeInt(u32, buf.items[old..][0..4], BT.cid, .little);
             }
             if (BT != void) try encodeStructBodyInto(BT, body, buf, allocator);
-            return;
-        }
+        },
     }
 }
