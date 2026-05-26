@@ -35,7 +35,7 @@ pub fn MtProto(comptime Handler: type) type {
 
         allocator: Allocator,
         session: session_mod.Session,
-        transport: tcp.AnyTransport,
+        transport: tcp.TcpTransport,
         write_queue: std.Io.Queue([]const u8),
         write_queue_buf: [32][]const u8,
         pending: std.AutoHashMap(i64, *PendingRequest),
@@ -47,7 +47,7 @@ pub fn MtProto(comptime Handler: type) type {
 
         pub fn init(
             allocator: Allocator,
-            transport: tcp.AnyTransport,
+            transport: tcp.TcpTransport,
             session: session_mod.Session,
             handler: *Handler,
         ) !*Self {

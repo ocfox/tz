@@ -2,7 +2,6 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const tcp = @import("transport/tcp.zig");
-const ws_mod = @import("transport/ws.zig");
 const session_mod = @import("session/message.zig");
 const storage_mod = @import("session/storage.zig");
 const auth_key_mod = @import("session/auth_key.zig");
@@ -25,7 +24,7 @@ pub const default_dcs: []const DC = &.{
     .{ .id = 3, .addr = Io.net.IpAddress.parseIp4("149.154.175.117", 443) catch @panic("bad ip"), .test_server = true },
 };
 
-pub const TransportMode = enum { tcp_abridged, tcp_intermediate, tcp_padded, websocket };
+pub const TransportMode = enum { tcp_abridged, tcp_intermediate, tcp_padded };
 
 pub const ConnectOptions = struct {
     dc: DC,
@@ -81,16 +80,10 @@ pub const Connector = struct {
 
     pub fn connect(io: Io, allocator: Allocator, opts: ConnectOptions) !*Connector {
         const stream = try opts.dc.addr.connect(io, .{ .mode = .stream });
-        var transport: tcp.AnyTransport = switch (opts.transport) {
-            .tcp_abridged => .{ .tcp = tcp.TcpTransport.init(stream, .abridged) },
-            .tcp_intermediate => .{ .tcp = tcp.TcpTransport.init(stream, .intermediate) },
-            .tcp_padded => .{ .tcp = tcp.TcpTransport.init(stream, .padded) },
-            .websocket => blk: {
-                var host_buf: [64]u8 = undefined;
-                const addr_str = std.fmt.bufPrint(&host_buf, "{}", .{opts.dc.addr}) catch "core.telegram.org";
-                const host = if (std.mem.lastIndexOfScalar(u8, addr_str, ':')) |i| addr_str[0..i] else addr_str;
-                break :blk .{ .ws = try ws_mod.WsTransport.connect(stream, io, host, allocator) };
-            },
+        var transport = switch (opts.transport) {
+            .tcp_abridged => tcp.TcpTransport.init(stream, .abridged),
+            .tcp_intermediate => tcp.TcpTransport.init(stream, .intermediate),
+            .tcp_padded => tcp.TcpTransport.init(stream, .padded),
         };
 
         const auth_key_result = blk: {
