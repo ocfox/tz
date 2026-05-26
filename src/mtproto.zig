@@ -191,7 +191,7 @@ pub fn MtProto(comptime Handler: type) type {
                         std.log.warn("bad_msg_notification error_code={}", .{error_code});
                         switch (error_code) {
                             // Msg ID / seqno issues: retry with corrected values.
-                            16, 17, 18, 19, 20, 32, 33 => self.retryPending(io),
+                            16, 17, 18, 19, 20, 32, 33, 48 => self.retryPending(io),
                             else => self.drainPending(io),
                         }
                     } else {
