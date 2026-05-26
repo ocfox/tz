@@ -70,9 +70,3 @@ if (try tz.helpers.route(ctx, update, msg.message, &.{
 ```
 
 see [examples/](examples/).
-
-## dep
-
-```sh
-zig fetch --save https://github.com/ocfox/tz/archive/master.tar.gz
-```
