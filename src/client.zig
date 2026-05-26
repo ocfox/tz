@@ -163,9 +163,13 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                             std.log.warn("failed to clear session: {}", .{e});
                         self.user_authorized = false;
                     }
-                    std.log.warn("disconnected: {}, reconnecting in {}ms", .{ err, backoff_ms });
-                    std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(backoff_ms)), .awake) catch |e| std.log.debug("sleep: {}", .{e});
-                    backoff_ms = @min(backoff_ms * 5, 10_000);
+                    // Jitter: ±20% of current backoff to avoid thundering herd.
+                    var jitter_byte: [1]u8 = undefined;
+                    io.random(&jitter_byte);
+                    const jitter = backoff_ms * (80 + @as(u64, jitter_byte[0] % 41)) / 100;
+                    std.log.warn("disconnected: {}, reconnecting in {}ms", .{ err, jitter });
+                    std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(jitter)), .awake) catch |e| std.log.debug("sleep: {}", .{e});
+                    backoff_ms = @min(backoff_ms * 2, 30_000);
                     continue;
                 };
                 backoff_ms = 100;
