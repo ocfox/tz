@@ -340,7 +340,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         fn runOnce(self: *Self, io: Io) !void {
             if (!self.dc_resolved) {
                 // Slot 0 stores the home DC: auth_key_id holds the DC id, auth_key is zeroed.
-                if (try self.opts.storage.load(io, self.allocator, 0)) |home| {
+                if (try self.opts.storage.load(io, 0)) |home| {
                     const home_dc: u8 = @truncate(@as(u64, @bitCast(home.auth_key_id)));
                     if (connector_mod.findDc(home_dc, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
                 }

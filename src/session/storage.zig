@@ -1,6 +1,5 @@
 const std = @import("std");
 const Io = std.Io;
-const Allocator = std.mem.Allocator;
 
 pub const SessionData = extern struct {
     auth_key: [256]u8,
@@ -15,12 +14,12 @@ pub const SessionStorage = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        load: *const fn (*anyopaque, Io, Allocator, dc_id: u8) anyerror!?SessionData,
+        load: *const fn (*anyopaque, Io, dc_id: u8) anyerror!?SessionData,
         save: *const fn (*anyopaque, Io, SessionData) anyerror!void,
     };
 
-    pub fn load(self: SessionStorage, io: Io, allocator: Allocator, dc_id: u8) !?SessionData {
-        return self.vtable.load(self.ptr, io, allocator, dc_id);
+    pub fn load(self: SessionStorage, io: Io, dc_id: u8) !?SessionData {
+        return self.vtable.load(self.ptr, io, dc_id);
     }
     pub fn save(self: SessionStorage, io: Io, data: SessionData) !void {
         return self.vtable.save(self.ptr, io, data);
@@ -34,7 +33,7 @@ pub const MemoryStorage = struct {
         return .{ .ptr = self, .vtable = &vtable };
     }
     const vtable = SessionStorage.VTable{ .load = load, .save = save };
-    fn load(ptr: *anyopaque, _: Io, _: Allocator, dc_id: u8) anyerror!?SessionData {
+    fn load(ptr: *anyopaque, _: Io, dc_id: u8) anyerror!?SessionData {
         const self: *MemoryStorage = @ptrCast(@alignCast(ptr));
         if (dc_id >= self.slots.len) return null;
         return self.slots[dc_id];
@@ -57,7 +56,7 @@ pub const FileStorage = struct {
         return .{ .ptr = self, .vtable = &vtable };
     }
     const vtable = SessionStorage.VTable{ .load = load, .save = save };
-    fn load(ptr: *anyopaque, io: Io, _: Allocator, dc_id: u8) anyerror!?SessionData {
+    fn load(ptr: *anyopaque, io: Io, dc_id: u8) anyerror!?SessionData {
         const self: *FileStorage = @ptrCast(@alignCast(ptr));
         const file = Io.Dir.cwd().openFile(io, self.path, .{}) catch |err| switch (err) {
             error.FileNotFound => return null,
@@ -85,14 +84,14 @@ pub const FileStorage = struct {
 test "MemoryStorage load/save roundtrip" {
     var mem = MemoryStorage{};
     const s = mem.storage();
-    try std.testing.expect(try s.load(std.Io.failing, std.testing.allocator, 2) == null);
+    try std.testing.expect(try s.load(std.Io.failing, 2) == null);
     var data: SessionData = undefined;
     @memset(&data.auth_key, 0xab);
     data.auth_key_id = 12345;
     data.server_salt = -99;
     data.dc_id = 2;
     try s.save(std.Io.failing, data);
-    const loaded = try s.load(std.Io.failing, std.testing.allocator, 2);
+    const loaded = try s.load(std.Io.failing, 2);
     try std.testing.expect(loaded != null);
     try std.testing.expectEqualSlices(u8, &data.auth_key, &loaded.?.auth_key);
     try std.testing.expectEqual(data.auth_key_id, loaded.?.auth_key_id);
@@ -111,7 +110,7 @@ test "FileStorage load/save roundtrip" {
     data.server_salt = 42;
     data.dc_id = 1;
     try s.save(io, data);
-    const loaded = (try s.load(io, std.testing.allocator, 1)).?;
+    const loaded = (try s.load(io, 1)).?;
     try std.testing.expectEqualSlices(u8, &data.auth_key, &loaded.auth_key);
     try std.testing.expectEqual(data.dc_id, loaded.dc_id);
     Io.Dir.cwd().deleteFile(io, path) catch {};
