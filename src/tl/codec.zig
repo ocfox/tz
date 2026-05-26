@@ -9,6 +9,7 @@ pub const deserialize = @import("deserialize.zig");
 pub const encodeAlloc = enc.encodeAlloc;
 pub const encode = enc.encode;
 pub const initRandom = enc.initRandom;
+pub const nextRandomId = enc.nextRandomId;
 
 pub const decode = dec.decode;
 pub const decodeStructBody = dec.decodeStructBody;

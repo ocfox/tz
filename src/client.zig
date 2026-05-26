@@ -533,19 +533,13 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
     };
 }
 
-var random_counter = std.atomic.Value(i64).init(0);
-
-pub fn nextRandomId() i64 {
-    return random_counter.fetchAdd(1, .monotonic);
-}
+pub const nextRandomId = codec.nextRandomId;
 
 fn initRandomCounter(io: Io) !void {
     var seed: [32]u8 = undefined;
     try io.randomSecure(&seed);
     var csprng = std.Random.DefaultCsprng.init(seed);
-    const val = csprng.random().int(i64);
-    random_counter.store(val, .monotonic);
-    codec.initRandom(val);
+    codec.initRandom(csprng.random().int(i64));
 }
 
 const layer: i32 = 225;

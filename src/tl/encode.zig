@@ -15,7 +15,7 @@ pub fn initRandom(seed: i64) void {
     random_id_counter.store(seed, .monotonic);
 }
 
-fn nextRandomId() i64 {
+pub fn nextRandomId() i64 {
     return random_id_counter.fetchAdd(1, .monotonic);
 }
 
