@@ -90,11 +90,6 @@ pub const Entities = struct {
     users: std.AutoHashMapUnmanaged(i64, i64) = .empty,
     channels: std.AutoHashMapUnmanaged(i64, i64) = .empty,
 
-    fn deinit(self: *Entities, allocator: Allocator) void {
-        self.users.deinit(allocator);
-        self.channels.deinit(allocator);
-    }
-
     pub fn accessHash(self: *const Entities, user_id: i64) ?i64 {
         return self.users.get(user_id);
     }
@@ -498,15 +493,14 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const upd = try codec.decodeStructBody(types.Updates_, &r, arena_alloc);
 
             var entities: Entities = .{};
-            defer entities.deinit(self.allocator);
             for (upd.users) |u| switch (u) {
                 .User => |user| if (user.access_hash.value) |ah|
-                    try entities.users.put(self.allocator, user.id, ah),
+                    try entities.users.put(arena_alloc, user.id, ah),
                 else => {},
             };
             for (upd.chats) |c| switch (c) {
                 .Channel => |ch| if (ch.access_hash.value) |ah|
-                    try entities.channels.put(self.allocator, ch.id, ah),
+                    try entities.channels.put(arena_alloc, ch.id, ah),
                 else => {},
             };
 
