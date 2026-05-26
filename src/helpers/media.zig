@@ -250,6 +250,7 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
             },
             else => return error.UnexpectedMediaType,
         };
+        // SAFETY: immediately overwritten by io.random below
         var rand_id: i64 = undefined;
         ctx.io.random(std.mem.asBytes(&rand_id));
         media_items[i] = .{ .media = media, .message = item.caption, .random_id = rand_id };
