@@ -4,7 +4,7 @@ telegram mtproto client in zig 0.16. wip.
 
 echo bot: ~700kb statically linked (`ReleaseSmall`).
 
-implements: mtproto 2.0, tcp/websocket transports, tl codegen from schema, comptime handler dispatch, bot/user auth, file upload/download, session persistence.
+implements: mtproto 2.0, tcp transport (abridged/intermediate/padded), tl codegen from schema, comptime handler dispatch, bot/user auth, file upload/download, session persistence.
 
 ## usage
 
