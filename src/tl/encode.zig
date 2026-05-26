@@ -5,6 +5,10 @@ const isFlag = flags_mod.isFlag;
 const isFlags = flags_mod.isFlags;
 const isFlags2 = flags_mod.isFlags2;
 
+const cid_vector: u32 = 0x1cb5c415;
+const cid_bool_true: u32 = 0x997275b5;
+const cid_bool_false: u32 = 0xbc799737;
+
 var random_id_counter = std.atomic.Value(i64).init(0);
 
 pub fn initRandom(seed: i64) void {
@@ -34,7 +38,7 @@ fn encodeWriter(comptime T: type, value: T, w: *std.Io.Writer) anyerror!void {
             try w.writeInt(IntT, @bitCast(value), .little);
         },
         .bool => {
-            const id: u32 = if (value) 0x997275b5 else 0xbc799737;
+            const id: u32 = if (value) cid_bool_true else cid_bool_false;
             try w.writeInt(u32, id, .little);
         },
         .array => |arr| {
@@ -78,7 +82,7 @@ fn encodeBytesWriter(data: []const u8, w: *std.Io.Writer) !void {
 }
 
 fn encodeVectorWriter(slice: anytype, w: *std.Io.Writer) !void {
-    try w.writeInt(u32, 0x1cb5c415, .little);
+    try w.writeInt(u32, cid_vector, .little);
     try w.writeInt(u32, @intCast(slice.len), .little);
     for (slice) |item| try encodeWriter(@TypeOf(item), item, w);
 }
@@ -147,7 +151,7 @@ fn encodeInto(value: anytype, buf: *std.ArrayListUnmanaged(u8), allocator: Alloc
             std.mem.writeInt(IntT, buf.items[start..][0..@sizeOf(T)], @bitCast(value), .little);
         },
         .bool => {
-            const id: u32 = if (value) 0x997275b5 else 0xbc799737;
+            const id: u32 = if (value) cid_bool_true else cid_bool_false;
             try encodeInto(id, buf, allocator);
         },
         .array => |arr| {
@@ -193,7 +197,7 @@ fn encodeBytesInto(data: []const u8, buf: *std.ArrayListUnmanaged(u8), allocator
 }
 
 fn encodeVectorInto(slice: anytype, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) !void {
-    try encodeInto(@as(u32, 0x1cb5c415), buf, allocator);
+    try encodeInto(@as(u32, cid_vector), buf, allocator);
     try encodeInto(@as(u32, @intCast(slice.len)), buf, allocator);
     for (slice) |item| try encodeInto(item, buf, allocator);
 }

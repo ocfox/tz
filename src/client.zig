@@ -481,7 +481,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const self: *Self = @ptrCast(@alignCast(ptr));
             if (payload.len < 4) return;
             const cid = std.mem.readInt(u32, payload[0..4], .little);
-            if (cid != 0x74ae4240) return; // only Updates_ container
+            if (cid != types.Updates_.cid) return;
             self.dispatchUpdates(io, payload) catch |err|
                 std.log.warn("update dispatch error: {}", .{err});
         }
@@ -553,9 +553,9 @@ fn wrapInit(allocator: Allocator, api_id: i32, query_bytes: []const u8) ![]u8 {
     const ser = @import("codec").serialize;
     var hdr: [256]u8 = undefined;
     var w: std.Io.Writer = .fixed(&hdr);
-    try w.writeInt(u32, 0xda9b0d0d, .little); // invokeWithLayer
+    try w.writeInt(u32, functions.InvokeWithLayer.cid, .little);
     try w.writeInt(i32, layer, .little);
-    try w.writeInt(u32, 0xc1cd5ea9, .little); // initConnection
+    try w.writeInt(u32, functions.InitConnection.cid, .little);
     try w.writeInt(i32, 0, .little);
     try ser.int(&w, api_id);
     try ser.string(&w, "tz");

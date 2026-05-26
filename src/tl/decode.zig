@@ -6,6 +6,11 @@ const isFlag = flags_mod.isFlag;
 const isFlags = flags_mod.isFlags;
 const isFlags2 = flags_mod.isFlags2;
 
+const cid_gzip_packed: u32 = 0x3072cfa1;
+const cid_vector: u32 = 0x1cb5c415;
+const cid_bool_true: u32 = 0x997275b5;
+const cid_bool_false: u32 = 0xbc799737;
+
 pub fn decode(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerror!T {
     return switch (@typeInfo(T)) {
         .int => r.takeInt(T, .little),
@@ -17,8 +22,8 @@ pub fn decode(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerro
         .bool => blk: {
             const id = try r.takeInt(u32, .little);
             break :blk switch (id) {
-                0x997275b5 => true,
-                0xbc799737 => false,
+                cid_bool_true => true,
+                cid_bool_false => false,
                 else => error.UnexpectedConstructor,
             };
         },
@@ -83,7 +88,7 @@ pub fn decodeStructBody(comptime T: type, r: *std.Io.Reader, allocator: Allocato
 
 fn decodeVector(comptime Child: type, r: *std.Io.Reader, allocator: Allocator) anyerror![]Child {
     const cid = try r.takeInt(u32, .little);
-    if (cid != 0x1cb5c415) return error.UnexpectedConstructor;
+    if (cid != cid_vector) return error.UnexpectedConstructor;
     const count = try r.takeInt(u32, .little);
     const slice = try allocator.alloc(Child, count);
     errdefer allocator.free(slice);
@@ -105,7 +110,7 @@ fn decompressGzip(r: *std.Io.Reader, allocator: Allocator) ![]u8 {
 fn decodeStruct(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerror!T {
     if (@hasDecl(T, "cid")) {
         const cid = try r.takeInt(u32, .little);
-        if (cid == 0x3072cfa1) { // gzip_packed
+        if (cid == cid_gzip_packed) {
             const data = try decompressGzip(r, allocator);
             defer allocator.free(data);
             var dr = std.Io.Reader.fixed(data);
