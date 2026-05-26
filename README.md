@@ -9,9 +9,11 @@ implements: mtproto 2.0, tcp transport (abridged/intermediate/padded), tl codege
 ## usage
 
 ```zig
+const h = tz.helpers;
+
 fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
     const msg = switch (update.message) { .Message => |m| m, else => return };
-    try tz.helpers.reply(ctx, update, msg.message, .{});
+    try h.reply(ctx, update, msg.message, .{});
 }
 
 const handlers = &.{
@@ -30,7 +32,7 @@ defer client.deinit();
 try client.run(io);
 ```
 
-call any tl function:
+call any tl function directly:
 
 ```zig
 var id_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
@@ -41,29 +43,29 @@ defer ctx.allocator.free(users);
 helpers:
 
 ```zig
-try tz.helpers.media.sendPhoto(ctx, update, jpeg_bytes, .{});
-try tz.helpers.media.sendDocument(ctx, update, pdf_bytes, "application/pdf", .{ .caption = "report" });
-try tz.helpers.media.sendAudio(ctx, update, mp3_bytes, "audio/mpeg", .{ .title = "Track", .performer = "Artist" });
-try tz.helpers.media.sendVideo(ctx, update, mp4_bytes, "video/mp4", .{});
-try tz.helpers.media.sendVoice(ctx, update, ogg_bytes, .{});
-try tz.helpers.forwardMessages(ctx, from_peer, to_peer, &[_]i32{msg.id});
-try tz.helpers.pinMessage(ctx, peer, msg.id, .{});
-try tz.helpers.addReaction(ctx, peer, msg.id, "❤");
+try h.media.sendPhoto(ctx, update, jpeg_bytes, .{});
+try h.media.sendDocument(ctx, update, pdf_bytes, "application/pdf", .{ .caption = "report" });
+try h.media.sendAudio(ctx, update, mp3_bytes, "audio/mpeg", .{ .title = "Track", .performer = "Artist" });
+try h.media.sendVideo(ctx, update, mp4_bytes, "video/mp4", .{});
+try h.media.sendVoice(ctx, update, ogg_bytes, .{});
+try h.forwardMessages(ctx, from_peer, to_peer, &[_]i32{msg.id});
+try h.pinMessage(ctx, peer, msg.id, .{});
+try h.addReaction(ctx, peer, msg.id, "❤");
 
-var ft = tz.helpers.fmt.FormattedText.init(allocator);
+var ft = h.fmt.FormattedText.init(allocator);
 defer ft.deinit();
 try ft.bold("hello"); try ft.plain(" world");
-try tz.helpers.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });
+try h.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });
 
-const bytes = try tz.helpers.download(ctx, tz.helpers.photoLocation(photo).?);
+const bytes = try h.download(ctx, h.photoLocation(photo).?);
 defer allocator.free(bytes);
 ```
 
 command routing:
 
 ```zig
-const R = tz.helpers.Cmd(tg.UpdateNewMessage);
-if (try tz.helpers.route(ctx, update, msg.message, &.{
+const R = h.Cmd(tg.UpdateNewMessage);
+if (try h.route(ctx, update, msg.message, &.{
     R.exact("/start", onStart),
     R.prefix("/echo ", onEcho),
 })) return;
