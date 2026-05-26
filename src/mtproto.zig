@@ -107,10 +107,10 @@ pub fn MtProto(comptime Handler: type) type {
             // SAFETY: pr.init() initializes buf and queue immediately below
             var pr: PendingRequest = undefined;
             pr.init();
-            pr.plaintext = try self.allocator.dupe(u8, request);
+            pr.plaintext = try gzipWrap(request, self.allocator);
             errdefer self.allocator.free(pr.plaintext);
 
-            const enc = try self.session.encrypt(request, self.allocator, io);
+            const enc = try self.session.encrypt(pr.plaintext, self.allocator, io);
             var enc_sent = false;
             defer if (!enc_sent) self.allocator.free(enc.data);
 
@@ -163,11 +163,12 @@ pub fn MtProto(comptime Handler: type) type {
             switch (cid) {
                 cid_msg_container => try self.dispatchContainer(io, payload),
                 cid_rpc_result => {
-                    self.pending_acks.append(self.allocator, msg_id) catch {};
+                    // OOM here only skips the ack; server will retry delivery, which is safe.
+                    self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
                     try self.deliverRpcResult(io, payload);
                 },
                 cid_gzip_packed => {
-                    self.pending_acks.append(self.allocator, msg_id) catch {};
+                    self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
                     var r: std.Io.Reader = .fixed(payload[4..]);
                     const compressed = try codec.deserialize.bytes(&r, self.allocator);
                     defer self.allocator.free(compressed);
@@ -216,7 +217,7 @@ pub fn MtProto(comptime Handler: type) type {
                     self.pong_event.set(io);
                 },
                 else => {
-                    self.pending_acks.append(self.allocator, msg_id) catch {};
+                    self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
                     self.handler.onUpdate(io, payload);
                 },
             }
@@ -417,4 +418,45 @@ pub fn MtProto(comptime Handler: type) type {
             if (ahead < 4) self.fetchSalts(io);
         }
     };
+}
+
+const gzip_threshold = 512;
+
+fn gzipWrap(data: []const u8, allocator: Allocator) ![]u8 {
+    if (data.len <= gzip_threshold) return allocator.dupe(u8, data);
+
+    const window = try allocator.alloc(u8, std.compress.flate.max_window_len);
+    defer allocator.free(window);
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+
+    var comp = try std.compress.flate.Compress.init(&out.writer, window, .gzip, .level_4);
+    var in: std.Io.Reader = .fixed(data);
+    _ = try in.streamRemaining(&comp.writer);
+    try comp.finish();
+
+    const compressed = out.written();
+    if (compressed.len >= data.len) return allocator.dupe(u8, data);
+
+    // Wrap: gzip_packed cid + TL bytes(compressed)
+    const tl_len: usize = if (compressed.len <= 253)
+        (1 + compressed.len + 3) & ~@as(usize, 3)
+    else
+        (4 + compressed.len + 3) & ~@as(usize, 3);
+    const result = try allocator.alloc(u8, 4 + tl_len);
+    std.mem.writeInt(u32, result[0..4], cid_gzip_packed, .little);
+    if (compressed.len <= 253) {
+        result[4] = @intCast(compressed.len);
+        @memcpy(result[5..][0..compressed.len], compressed);
+        @memset(result[5 + compressed.len ..][0 .. (4 - (1 + compressed.len) % 4) % 4], 0);
+    } else {
+        result[4] = 0xfe;
+        result[5] = @intCast(compressed.len & 0xff);
+        result[6] = @intCast((compressed.len >> 8) & 0xff);
+        result[7] = @intCast((compressed.len >> 16) & 0xff);
+        @memcpy(result[8..][0..compressed.len], compressed);
+        @memset(result[8 + compressed.len ..][0 .. (4 - compressed.len % 4) % 4], 0);
+    }
+    return result;
 }
