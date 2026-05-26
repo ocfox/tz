@@ -29,7 +29,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const io = threaded.io();
 
     // Session is persisted to disk so the bot can reconnect without re-doing DH key exchange.
-    var file_storage = tz.FileStorage.init("echo_bot.session");
+    var file_storage = tz.storage.FileStorage.init("echo_bot.session");
 
     // Credentials are read from environment and wired directly into Client.
     const client = try tz.Client(handlers).init(allocator, .{

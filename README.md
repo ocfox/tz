@@ -19,7 +19,7 @@ const handlers = &.{
 };
 
 // boot
-var storage = tz.FileStorage.init("bot.session");
+var storage = tz.storage.FileStorage.init("bot.session");
 const client = try tz.Client(handlers).init(allocator, .{
     .api_id    = api_id,
     .api_hash  = api_hash,
@@ -41,16 +41,16 @@ defer ctx.allocator.free(users);
 helpers:
 
 ```zig
-try tz.helpers.sendPhoto(ctx, update, jpeg_bytes, .{});
-try tz.helpers.sendDocument(ctx, update, pdf_bytes, "application/pdf", .{ .caption = "report" });
-try tz.helpers.sendAudio(ctx, update, mp3_bytes, "audio/mpeg", .{ .title = "Track", .performer = "Artist" });
-try tz.helpers.sendVideo(ctx, update, mp4_bytes, "video/mp4", .{});
-try tz.helpers.sendVoice(ctx, update, ogg_bytes, .{});
+try tz.helpers.media.sendPhoto(ctx, update, jpeg_bytes, .{});
+try tz.helpers.media.sendDocument(ctx, update, pdf_bytes, "application/pdf", .{ .caption = "report" });
+try tz.helpers.media.sendAudio(ctx, update, mp3_bytes, "audio/mpeg", .{ .title = "Track", .performer = "Artist" });
+try tz.helpers.media.sendVideo(ctx, update, mp4_bytes, "video/mp4", .{});
+try tz.helpers.media.sendVoice(ctx, update, ogg_bytes, .{});
 try tz.helpers.forwardMessages(ctx, from_peer, to_peer, &[_]i32{msg.id});
 try tz.helpers.pinMessage(ctx, peer, msg.id, .{});
 try tz.helpers.addReaction(ctx, peer, msg.id, "❤");
 
-var ft = tz.helpers.FormattedText.init(allocator);
+var ft = tz.helpers.fmt.FormattedText.init(allocator);
 defer ft.deinit();
 try ft.bold("hello"); try ft.plain(" world");
 try tz.helpers.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });

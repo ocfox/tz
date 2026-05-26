@@ -10,8 +10,7 @@ pub const ClientOptions = client.ClientOptions;
 pub const Context = client.Context;
 pub const handler = client.handler;
 
-pub const FileStorage = @import("session/storage.zig").FileStorage;
-pub const MemoryStorage = @import("session/storage.zig").MemoryStorage;
+pub const storage = @import("session/storage.zig");
 
 pub const DC = connector.DC;
 pub const default_dcs = connector.default_dcs;

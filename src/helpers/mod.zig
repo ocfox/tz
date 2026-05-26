@@ -2,44 +2,20 @@ const std = @import("std");
 const types = @import("types");
 const functions = @import("functions");
 const client = @import("../client.zig");
-const upload_file = @import("../upload.zig");
-const download_file = @import("../download.zig");
 
 pub const Context = client.Context;
 pub const Entities = client.Entities;
 
-pub const upload = upload_file.upload;
-pub const UploadOptions = upload_file.UploadOptions;
-pub const download = download_file.download;
-pub const documentLocation = download_file.documentLocation;
-pub const photoLocation = download_file.photoLocation;
+pub const media = @import("media.zig");
+pub const keyboard = @import("keyboard.zig");
+pub const fmt = @import("fmt.zig");
 
-// media
-const media = @import("media.zig");
-pub const SendMediaOptions = media.SendMediaOptions;
-pub const AudioOptions = media.AudioOptions;
-pub const VideoOptions = media.VideoOptions;
-pub const VoiceOptions = media.VoiceOptions;
-pub const AlbumItemKind = media.AlbumItemKind;
-pub const AlbumItem = media.AlbumItem;
-pub const AlbumOptions = media.AlbumOptions;
-pub const sendPhoto = media.sendPhoto;
-pub const sendDocument = media.sendDocument;
-pub const sendAudio = media.sendAudio;
-pub const sendVideo = media.sendVideo;
-pub const sendVoice = media.sendVoice;
-pub const sendAlbum = media.sendAlbum;
+pub const upload = @import("../upload.zig").upload;
+pub const UploadOptions = @import("../upload.zig").UploadOptions;
 
-// keyboard
-const keyboard = @import("keyboard.zig");
-pub const callbackButton = keyboard.callbackButton;
-pub const urlButton = keyboard.urlButton;
-pub const inlineRow = keyboard.inlineRow;
-pub const inlineKeyboard = keyboard.inlineKeyboard;
-
-// text
-pub const FormattedText = @import("text.zig").FormattedText;
-pub const utf16Len = @import("text.zig").utf16Len;
+pub const download = @import("../download.zig").download;
+pub const documentLocation = @import("../download.zig").documentLocation;
+pub const photoLocation = @import("../download.zig").photoLocation;
 
 pub const ReplyOptions = struct {
     reply_to: ?i32 = null,
