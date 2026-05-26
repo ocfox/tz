@@ -204,8 +204,13 @@ pub fn MtProto(comptime Handler: type) type {
                         const error_code = std.mem.readInt(i32, payload[16..20], .little);
                         std.log.warn("bad_msg_notification error_code={}", .{error_code});
                         switch (error_code) {
-                            // Msg ID / seqno issues: retry with corrected values.
-                            16, 17, 18, 19, 20, 32, 33, 48 => self.retryPending(io),
+                            // Msg ID too low/high: correct clock offset from server msg_id.
+                            16, 17 => {
+                                self.session.correctTimeOffset(msg_id, io);
+                                self.retryPending(io);
+                            },
+                            // Other seqno/msg_id issues: retry with corrected values.
+                            18, 19, 20, 32, 33, 48 => self.retryPending(io),
                             else => self.drainPending(io),
                         }
                     } else {
@@ -372,7 +377,7 @@ pub fn MtProto(comptime Handler: type) type {
             // raw[16..20] is the vector cid; skip it
             const count = std.mem.readInt(u32, raw[20..24], .little);
             const local_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
-            self.server_time_offset = @as(i64, server_now) - @divTrunc(local_ns, std.time.ns_per_s);
+            self.server_time_offset = @as(i64, server_now) - @as(i64, @intCast(@divTrunc(local_ns, std.time.ns_per_s)));
             self.salts.clearRetainingCapacity();
             var i: usize = 0;
             while (i < count) : (i += 1) {
@@ -389,7 +394,7 @@ pub fn MtProto(comptime Handler: type) type {
 
         fn serverNow(self: *Self, io: Io) i64 {
             const local_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
-            return @divTrunc(local_ns, std.time.ns_per_s) + self.server_time_offset;
+            return @as(i64, @intCast(@divTrunc(local_ns, std.time.ns_per_s))) + self.server_time_offset;
         }
 
         fn applySalt(self: *Self, server_now: i32) void {

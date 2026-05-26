@@ -11,6 +11,7 @@ pub const Session = struct {
     session_id: i64,
     seq_no: u32 = 0,
     last_msg_id: i64 = 0,
+    time_offset: i64 = 0,
     encrypt_scratch: std.ArrayListUnmanaged(u8) = .empty,
     decrypt_scratch: std.ArrayListUnmanaged(u8) = .empty,
 
@@ -30,9 +31,17 @@ pub const Session = struct {
         self.decrypt_scratch.deinit(allocator);
     }
 
+    pub fn correctTimeOffset(self: *Session, server_msg_id: i64, io: Io) void {
+        const server_s = server_msg_id >> 32;
+        const local_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
+        const local_s: i64 = @intCast(@divTrunc(local_ns, std.time.ns_per_s));
+        self.time_offset = server_s - local_s;
+        std.log.debug("time_offset corrected to {}s", .{self.time_offset});
+    }
+
     pub fn nextMsgId(self: *Session, io: Io) i64 {
         const now_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
-        const unix_s = @divTrunc(now_ns, std.time.ns_per_s);
+        const unix_s = @divTrunc(now_ns, std.time.ns_per_s) + self.time_offset;
         const frac = @rem(now_ns, std.time.ns_per_s);
         const unix_s_u: u64 = @intCast(unix_s);
         const frac_u: u64 = @intCast(frac & ~@as(@TypeOf(frac), 3));
