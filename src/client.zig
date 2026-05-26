@@ -56,21 +56,19 @@ pub const Context = struct {
 
     /// Send a typed TL request, return the decoded response.
     pub fn call(self: Context, request: anytype) !@TypeOf(request).Response {
-        var buf: [4096]u8 = undefined;
-        var w: std.Io.Writer = .fixed(&buf);
-        try codec.encode(request, &w);
-        const raw = try self.callFn(self.client, self.io, w.buffered());
+        const bytes = try codec.encodeAlloc(request, self.allocator);
+        defer self.allocator.free(bytes);
+        const raw = try self.callFn(self.client, self.io, bytes);
         defer self.allocator.free(raw);
         var r: std.Io.Reader = .fixed(raw);
         return codec.decode(@TypeOf(request).Response, &r, self.allocator);
     }
 
-    /// Send a typed TL request, discard the response. No heap allocation for decoding.
+    /// Send a typed TL request, discard the response.
     pub fn exec(self: Context, request: anytype) !void {
-        var buf: [4096]u8 = undefined;
-        var w: std.Io.Writer = .fixed(&buf);
-        try codec.encode(request, &w);
-        const raw = try self.callFn(self.client, self.io, w.buffered());
+        const bytes = try codec.encodeAlloc(request, self.allocator);
+        defer self.allocator.free(bytes);
+        const raw = try self.callFn(self.client, self.io, bytes);
         self.allocator.free(raw);
     }
 
@@ -178,10 +176,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         /// Send a typed TL request, return the decoded response.
         pub fn call(self: *Self, io: Io, request: anytype) !@TypeOf(request).Response {
-            var buf: [4096]u8 = undefined;
-            var w: std.Io.Writer = .fixed(&buf);
-            try codec.encode(request, &w);
-            const raw = try self.callRaw(io, w.buffered());
+            const bytes = try codec.encodeAlloc(request, self.allocator);
+            defer self.allocator.free(bytes);
+            const raw = try self.callRaw(io, bytes);
             defer self.allocator.free(raw);
             if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid) {
                 try self.handleRpcError(io, raw);
@@ -192,10 +189,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         }
 
         fn exec(self: *Self, io: Io, request: anytype) !void {
-            var buf: [4096]u8 = undefined;
-            var w: std.Io.Writer = .fixed(&buf);
-            try codec.encode(request, &w);
-            const raw = try self.callRaw(io, w.buffered());
+            const bytes = try codec.encodeAlloc(request, self.allocator);
+            defer self.allocator.free(bytes);
+            const raw = try self.callRaw(io, bytes);
             defer self.allocator.free(raw);
             if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid)
                 return self.handleRpcError(io, raw);
