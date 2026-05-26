@@ -477,27 +477,36 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const self: *Self = @ptrCast(@alignCast(ptr));
             if (payload.len < 4) return;
             const cid = std.mem.readInt(u32, payload[0..4], .little);
-            if (cid != types.Updates_.cid) return;
-            self.dispatchUpdates(io, payload) catch |err|
-                std.log.warn("update dispatch error: {}", .{err});
+            switch (cid) {
+                types.Updates_.cid, types.UpdatesCombined.cid => self.dispatchUpdates(io, payload) catch |err|
+                    std.log.warn("update dispatch error: {}", .{err}),
+                types.UpdateShort.cid => self.dispatchShort(io, payload) catch |err|
+                    std.log.warn("update dispatch error: {}", .{err}),
+                types.UpdateShortMessage.cid => self.dispatchShortMessage(io, payload) catch |err|
+                    std.log.warn("update dispatch error: {}", .{err}),
+                types.UpdateShortChatMessage.cid => self.dispatchShortChatMessage(io, payload) catch |err|
+                    std.log.warn("update dispatch error: {}", .{err}),
+                types.UpdatesTooLong.cid => self.exec(io, functions.updates.GetState{}) catch |err|
+                    std.log.warn("UpdatesTooLong resync error: {}", .{err}),
+                else => {},
+            }
         }
 
-        fn dispatchUpdates(self: *Self, io: Io, payload: []const u8) !void {
-            if (handlers.len == 0) return;
-            var arena = std.heap.ArenaAllocator.init(self.allocator);
-            defer arena.deinit();
-            const arena_alloc = arena.allocator();
-
-            var r: std.Io.Reader = .fixed(payload[4..]);
-            const upd = try codec.decodeStructBody(types.Updates_, &r, arena_alloc);
-
+        fn dispatchUpdateSlice(
+            self: *Self,
+            io: Io,
+            arena_alloc: Allocator,
+            updates: []const types.Update,
+            users: []const types.User,
+            chats: []const types.Chat,
+        ) !void {
             var entities: Entities = .{};
-            for (upd.users) |u| switch (u) {
+            for (users) |u| switch (u) {
                 .User => |user| if (user.access_hash.value) |ah|
                     try entities.users.put(arena_alloc, user.id, ah),
                 else => {},
             };
-            for (upd.chats) |c| switch (c) {
+            for (chats) |c| switch (c) {
                 .Channel => |ch| if (ch.access_hash.value) |ah|
                     try entities.channels.put(arena_alloc, ch.id, ah),
                 else => {},
@@ -512,7 +521,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .callFileFn = callFileImpl,
             };
 
-            for (upd.updates) |u| {
+            for (updates) |u| {
                 const update_cid: u32 = switch (u) {
                     inline else => |body| @TypeOf(body).cid,
                 };
@@ -523,6 +532,95 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     }
                 }
             }
+        }
+
+        fn dispatchUpdates(self: *Self, io: Io, payload: []const u8) !void {
+            if (handlers.len == 0) return;
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const arena_alloc = arena.allocator();
+            var r: std.Io.Reader = .fixed(payload[4..]);
+            const cid = std.mem.readInt(u32, payload[0..4], .little);
+            if (cid == types.UpdatesCombined.cid) {
+                const upd = try codec.decodeStructBody(types.UpdatesCombined, &r, arena_alloc);
+                try self.dispatchUpdateSlice(io, arena_alloc, upd.updates, upd.users, upd.chats);
+            } else {
+                const upd = try codec.decodeStructBody(types.Updates_, &r, arena_alloc);
+                try self.dispatchUpdateSlice(io, arena_alloc, upd.updates, upd.users, upd.chats);
+            }
+        }
+
+        fn dispatchShort(self: *Self, io: Io, payload: []const u8) !void {
+            if (handlers.len == 0) return;
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const arena_alloc = arena.allocator();
+            var r: std.Io.Reader = .fixed(payload[4..]);
+            const upd = try codec.decodeStructBody(types.UpdateShort, &r, arena_alloc);
+            const updates = [_]types.Update{upd.update};
+            try self.dispatchUpdateSlice(io, arena_alloc, &updates, &.{}, &.{});
+        }
+
+        fn dispatchShortMessage(self: *Self, io: Io, payload: []const u8) !void {
+            if (handlers.len == 0) return;
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const arena_alloc = arena.allocator();
+            var r: std.Io.Reader = .fixed(payload[4..]);
+            const short = try codec.decodeStructBody(types.UpdateShortMessage, &r, arena_alloc);
+            const msg = types.Message_{
+                .id = short.id,
+                .out = short.out,
+                .mentioned = short.mentioned,
+                .media_unread = short.media_unread,
+                .silent = short.silent,
+                .from_id = if (short.out.value != null) .none else .{ .value = .{ .PeerUser = .{ .user_id = short.user_id } } },
+                .peer_id = .{ .PeerUser = .{ .user_id = short.user_id } },
+                .date = short.date,
+                .message = short.message,
+                .fwd_from = short.fwd_from,
+                .via_bot_id = short.via_bot_id,
+                .reply_to = short.reply_to,
+                .entities = short.entities,
+                .ttl_period = short.ttl_period,
+            };
+            const updates = [_]types.Update{.{ .UpdateNewMessage = .{
+                .message = .{ .Message = msg },
+                .pts = short.pts,
+                .pts_count = short.pts_count,
+            } }};
+            try self.dispatchUpdateSlice(io, arena_alloc, &updates, &.{}, &.{});
+        }
+
+        fn dispatchShortChatMessage(self: *Self, io: Io, payload: []const u8) !void {
+            if (handlers.len == 0) return;
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const arena_alloc = arena.allocator();
+            var r: std.Io.Reader = .fixed(payload[4..]);
+            const short = try codec.decodeStructBody(types.UpdateShortChatMessage, &r, arena_alloc);
+            const msg = types.Message_{
+                .id = short.id,
+                .out = short.out,
+                .mentioned = short.mentioned,
+                .media_unread = short.media_unread,
+                .silent = short.silent,
+                .from_id = .{ .value = .{ .PeerUser = .{ .user_id = short.from_id } } },
+                .peer_id = .{ .PeerChat = .{ .chat_id = short.chat_id } },
+                .date = short.date,
+                .message = short.message,
+                .fwd_from = short.fwd_from,
+                .via_bot_id = short.via_bot_id,
+                .reply_to = short.reply_to,
+                .entities = short.entities,
+                .ttl_period = short.ttl_period,
+            };
+            const updates = [_]types.Update{.{ .UpdateNewMessage = .{
+                .message = .{ .Message = msg },
+                .pts = short.pts,
+                .pts_count = short.pts_count,
+            } }};
+            try self.dispatchUpdateSlice(io, arena_alloc, &updates, &.{}, &.{});
         }
     };
 }
