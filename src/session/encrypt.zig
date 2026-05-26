@@ -111,7 +111,9 @@ pub const Session = struct {
         return .{ .data = out, .msg_id = msg_id };
     }
 
-    pub fn decrypt(self: *Session, ciphertext: []const u8, allocator: Allocator) ![]u8 {
+    pub const DecryptResult = struct { payload: []u8, msg_id: i64 };
+
+    pub fn decrypt(self: *Session, ciphertext: []const u8, allocator: Allocator) !DecryptResult {
         if (ciphertext.len < 24) return error.TooShort;
         const msg_key: *const [16]u8 = ciphertext[8..24];
         const encrypted = ciphertext[24..];
@@ -126,9 +128,10 @@ pub const Session = struct {
         @memcpy(inner, encrypted);
         aes_ige.decrypt(aes_key, aes_iv, inner);
 
+        const msg_id = std.mem.readInt(i64, inner[16..24], .little);
         const payload_len = std.mem.readInt(u32, inner[28..32], .little);
         if (32 + payload_len > inner.len) return error.BadLength;
-        return try allocator.dupe(u8, inner[32..][0..payload_len]);
+        return .{ .payload = try allocator.dupe(u8, inner[32..][0..payload_len]), .msg_id = msg_id };
     }
 };
 
@@ -184,6 +187,6 @@ test "message encrypt/decrypt roundtrip" {
     @memcpy(server_msg[24..], inner);
 
     const decrypted = try session.decrypt(server_msg, allocator);
-    defer allocator.free(decrypted);
-    try std.testing.expectEqualSlices(u8, plaintext, decrypted);
+    defer allocator.free(decrypted.payload);
+    try std.testing.expectEqualSlices(u8, plaintext, decrypted.payload);
 }

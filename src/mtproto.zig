@@ -40,6 +40,7 @@ pub fn MtProto(comptime Handler: type) type {
         write_queue_buf: [32][]const u8,
         pending: std.AutoHashMap(i64, *PendingRequest),
         pending_mutex: std.Io.Mutex = .init,
+        pending_acks: std.ArrayListUnmanaged(i64) = .empty,
         pong_event: std.Io.Event = .unset,
         select_buf: [3]LoopResult,
         select: ?std.Io.Select(LoopResult) = null,
@@ -69,6 +70,7 @@ pub fn MtProto(comptime Handler: type) type {
         }
 
         pub fn deinit(self: *Self) void {
+            self.pending_acks.deinit(self.allocator);
             self.pending.deinit();
             self.session.deinit(self.allocator);
             self.allocator.destroy(self);
@@ -140,23 +142,28 @@ pub fn MtProto(comptime Handler: type) type {
                     break;
                 };
                 defer self.allocator.free(frame);
-                const payload = self.session.decrypt(frame, self.allocator) catch |e| {
+                const decrypted = self.session.decrypt(frame, self.allocator) catch |e| {
                     std.log.debug("readLoop: decrypt failed: {}", .{e});
                     continue;
                 };
-                defer self.allocator.free(payload);
-                self.dispatch(io, payload) catch |err| std.log.debug("dispatch: {}", .{err});
+                defer self.allocator.free(decrypted.payload);
+                self.dispatch(io, decrypted.payload, decrypted.msg_id) catch |err| std.log.debug("dispatch: {}", .{err});
+                self.flushAcks(io);
             }
         }
 
-        fn dispatch(self: *Self, io: Io, payload: []const u8) anyerror!void {
+        fn dispatch(self: *Self, io: Io, payload: []const u8, msg_id: i64) anyerror!void {
             if (payload.len < 4) return;
             const cid = std.mem.readInt(u32, payload[0..4], .little);
             std.log.debug("recv cid=0x{x:0>8}", .{cid});
             switch (cid) {
                 cid_msg_container => try self.dispatchContainer(io, payload),
-                cid_rpc_result => try self.deliverRpcResult(io, payload),
+                cid_rpc_result => {
+                    self.pending_acks.append(self.allocator, msg_id) catch {};
+                    try self.deliverRpcResult(io, payload);
+                },
                 cid_gzip_packed => {
+                    self.pending_acks.append(self.allocator, msg_id) catch {};
                     var r: std.Io.Reader = .fixed(payload[4..]);
                     const compressed = try codec.deserialize.bytes(&r, self.allocator);
                     defer self.allocator.free(compressed);
@@ -165,7 +172,8 @@ pub fn MtProto(comptime Handler: type) type {
                     defer aw.deinit();
                     var decomp: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
                     _ = try decomp.reader.streamRemaining(&aw.writer);
-                    try self.dispatch(io, aw.written());
+                    // msg_id already queued above; pass 0 so inner doesn't double-ack
+                    try self.dispatch(io, aw.written(), 0);
                 },
                 types.MsgsAck.cid => {},
                 types.NewSessionCreated.cid => {
@@ -203,6 +211,7 @@ pub fn MtProto(comptime Handler: type) type {
                     self.pong_event.set(io);
                 },
                 else => {
+                    self.pending_acks.append(self.allocator, msg_id) catch {};
                     self.handler.onUpdate(io, payload);
                 },
             }
@@ -214,12 +223,29 @@ pub fn MtProto(comptime Handler: type) type {
             var pos: usize = 8;
             for (0..count) |_| {
                 if (pos + 16 > payload.len) break;
+                const inner_msg_id = std.mem.readInt(i64, payload[pos..][0..8], .little);
                 const bytes = std.mem.readInt(u32, payload[pos + 12 ..][0..4], .little);
                 const body_end = pos + 16 + bytes;
                 if (body_end > payload.len) break;
-                self.dispatch(io, payload[pos + 16 .. body_end]) catch |err| std.log.debug("dispatch: {}", .{err});
+                self.dispatch(io, payload[pos + 16 .. body_end], inner_msg_id) catch |err| std.log.debug("dispatch: {}", .{err});
                 pos = body_end;
             }
+        }
+
+        fn flushAcks(self: *Self, io: Io) void {
+            if (self.pending_acks.items.len == 0) return;
+            // 4 (cid) + 4 (vector cid) + 4 (count) + 8*N (ids)
+            const max_ids = 64;
+            var buf: [4 + 4 + 4 + 8 * max_ids]u8 = undefined;
+            const ids = self.pending_acks.items[0..@min(self.pending_acks.items.len, max_ids)];
+            var w: std.Io.Writer = .fixed(&buf);
+            w.writeInt(u32, types.MsgsAck.cid, .little) catch return;
+            w.writeInt(u32, 0x1cb5c415, .little) catch return; // vector cid
+            w.writeInt(u32, @intCast(ids.len), .little) catch return;
+            for (ids) |id| w.writeInt(i64, id, .little) catch return;
+            self.pending_acks.clearRetainingCapacity();
+            const enc = self.session.encrypt(w.buffered(), self.allocator, io) catch return;
+            self.write_queue.putOne(io, enc.data) catch self.allocator.free(enc.data);
         }
 
         fn deliverRpcResult(self: *Self, io: Io, payload: []const u8) !void {
