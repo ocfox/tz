@@ -1,7 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const tcp = @import("../transport/tcp.zig");
+const transport_mod = @import("../transport.zig");
 const sha = @import("../crypto/sha.zig");
 const rsa = @import("../crypto/rsa.zig");
 const dh = @import("../crypto/dh.zig");
@@ -70,7 +70,7 @@ fn gcd(a: u64, b: u64) u64 {
     return x;
 }
 
-fn readPlainMsg(transport: *tcp.TcpTransport, io: Io, allocator: Allocator) ![]u8 {
+fn readPlainMsg(transport: *transport_mod.Transport, io: Io, allocator: Allocator) ![]u8 {
     const frame = try transport.readFrame(io, allocator);
     errdefer allocator.free(frame);
     if (frame.len < 20) return error.TooShort;
@@ -81,7 +81,7 @@ fn readPlainMsg(transport: *tcp.TcpTransport, io: Io, allocator: Allocator) ![]u
     return payload;
 }
 
-fn writePlainMsg(transport: *tcp.TcpTransport, io: Io, payload: []const u8) !void {
+fn writePlainMsg(transport: *transport_mod.Transport, io: Io, payload: []const u8) !void {
     const frame_len = 20 + payload.len;
     const padded = ((frame_len + 3) / 4) * 4;
     std.debug.assert(padded <= 544);
@@ -99,7 +99,7 @@ fn writePlainMsg(transport: *tcp.TcpTransport, io: Io, payload: []const u8) !voi
     try transport.writeFrame(io, frame);
 }
 
-pub fn perform(transport: *tcp.TcpTransport, io: Io, allocator: Allocator) !AuthKeyResult {
+pub fn perform(transport: *transport_mod.Transport, io: Io, allocator: Allocator) !AuthKeyResult {
     // Step 1: req_pq_multi
     var nonce: [16]u8 = undefined;
     io.random(&nonce);

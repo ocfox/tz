@@ -1,7 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const tcp = @import("transport/tcp.zig");
+const transport_mod = @import("transport.zig");
 const session_mod = @import("session/message.zig");
 const storage_mod = @import("session/storage.zig");
 const auth_key_mod = @import("session/auth_key.zig");
@@ -24,11 +24,9 @@ pub const default_dcs: []const DC = &.{
     .{ .id = 3, .addr = Io.net.IpAddress.parseIp4("149.154.175.117", 443) catch @panic("bad ip"), .test_server = true },
 };
 
-pub const TransportMode = enum { tcp_abridged, tcp_intermediate, tcp_padded };
-
 pub const ConnectOptions = struct {
     dc: DC,
-    transport: TransportMode = .tcp_abridged,
+    transport: transport_mod.Mode = .abridged,
     session_storage: storage_mod.SessionStorage,
     api_id: i32,
     api_hash: []const u8,
@@ -80,11 +78,7 @@ pub const Connector = struct {
 
     pub fn connect(io: Io, allocator: Allocator, opts: ConnectOptions) !*Connector {
         const stream = try opts.dc.addr.connect(io, .{ .mode = .stream });
-        var transport = switch (opts.transport) {
-            .tcp_abridged => tcp.TcpTransport.init(stream, .abridged),
-            .tcp_intermediate => tcp.TcpTransport.init(stream, .intermediate),
-            .tcp_padded => tcp.TcpTransport.init(stream, .padded),
-        };
+        var transport = transport_mod.Transport.init(stream, opts.transport);
 
         const auth_key_result = blk: {
             if (try opts.session_storage.load(io, opts.dc.id)) |saved| {

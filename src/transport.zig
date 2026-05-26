@@ -4,16 +4,16 @@ const Allocator = std.mem.Allocator;
 
 pub const Mode = enum { abridged, intermediate, padded };
 
-pub const TcpTransport = struct {
+pub const Transport = struct {
     stream: Io.net.Stream,
     mode: Mode,
     init_sent: bool = false,
 
-    pub fn init(stream: Io.net.Stream, mode: Mode) TcpTransport {
+    pub fn init(stream: Io.net.Stream, mode: Mode) Transport {
         return .{ .stream = stream, .mode = mode };
     }
 
-    pub fn sendInit(self: *TcpTransport, io: Io) !void {
+    pub fn sendInit(self: *Transport, io: Io) !void {
         if (self.init_sent) return;
         self.init_sent = true;
         var buf: [64]u8 = undefined;
@@ -27,7 +27,7 @@ pub const TcpTransport = struct {
         try w.flush();
     }
 
-    pub fn writeFrame(self: *TcpTransport, io: Io, data: []const u8) !void {
+    pub fn writeFrame(self: *Transport, io: Io, data: []const u8) !void {
         try self.sendInit(io);
         std.debug.assert(data.len % 4 == 0);
         var buf: [256]u8 = undefined;
@@ -55,7 +55,7 @@ pub const TcpTransport = struct {
         try w.flush();
     }
 
-    pub fn readFrame(self: *TcpTransport, io: Io, allocator: Allocator) ![]u8 {
+    pub fn readFrame(self: *Transport, io: Io, allocator: Allocator) ![]u8 {
         var buf: [256]u8 = undefined;
         var sr = self.stream.reader(io, &buf);
         const r = &sr.interface;

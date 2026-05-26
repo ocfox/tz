@@ -256,7 +256,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const dc = self.findDc(dc_id) orelse return error.DcNotFound;
             const conn = try Connector.connect(io2, self.allocator, .{
                 .dc = dc,
-                .transport = .tcp_abridged,
+                .transport = .abridged,
                 .session_storage = self.opts.storage,
                 .api_id = self.opts.api_id,
                 .api_hash = self.opts.api_hash,
@@ -349,7 +349,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             std.log.info("connecting to DC {}", .{self.opts.dc.id});
             const c = try Connector.connect(io, self.allocator, .{
                 .dc = self.opts.dc,
-                .transport = .tcp_abridged,
+                .transport = .abridged,
                 .session_storage = self.opts.storage,
                 .api_id = self.opts.api_id,
                 .api_hash = self.opts.api_hash,

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const tcp = @import("transport/tcp.zig");
+const transport_mod = @import("transport.zig");
 const session_mod = @import("session/message.zig");
 const codec = @import("codec");
 const types = @import("types");
@@ -35,7 +35,7 @@ pub fn MtProto(comptime Handler: type) type {
 
         allocator: Allocator,
         session: session_mod.Session,
-        transport: tcp.TcpTransport,
+        transport: transport_mod.Transport,
         write_queue: std.Io.Queue([]const u8),
         write_queue_buf: [32][]const u8,
         pending: std.AutoHashMap(i64, *PendingRequest),
@@ -47,7 +47,7 @@ pub fn MtProto(comptime Handler: type) type {
 
         pub fn init(
             allocator: Allocator,
-            transport: tcp.TcpTransport,
+            transport: transport_mod.Transport,
             session: session_mod.Session,
             handler: *Handler,
         ) !*Self {
