@@ -59,22 +59,21 @@ pub fn rsaEncrypt(
     var m_bytes: [256]u8 = undefined;
     m_bytes[0] = 0;
     @memcpy(m_bytes[1..], msg);
-    try setFromBigEndianBytes(&m, &m_bytes, allocator);
-    try setFromBigEndianBytes(&n, n_bytes, allocator);
+    try setFromBigEndianBytes(&m, &m_bytes);
+    try setFromBigEndianBytes(&n, n_bytes);
 
     try modPow(&result, &m, &e_val, &n, allocator);
 
     try bigEndianBytes(&result, out, allocator);
 }
 
-pub fn setFromBigEndianBytes(m: *Managed, bytes: []const u8, allocator: Allocator) !void {
+pub fn setFromBigEndianBytes(m: *Managed, bytes: []const u8) !void {
     std.debug.assert(bytes.len <= 256);
     var hex: [512]u8 = undefined;
     for (bytes, 0..) |b, i| {
         _ = std.fmt.bufPrint(hex[i * 2 .. i * 2 + 2], "{x:0>2}", .{b}) catch @panic("hex buf too small");
     }
     try m.setString(16, hex[0 .. bytes.len * 2]);
-    _ = allocator;
 }
 
 pub fn bigEndianBytes(m: *const Managed, out: []u8, allocator: Allocator) !void {

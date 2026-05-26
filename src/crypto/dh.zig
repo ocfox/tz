@@ -32,9 +32,9 @@ pub fn compute(
     var secret = try Managed.init(allocator);
     defer secret.deinit();
 
-    try rsa.setFromBigEndianBytes(&b, b_bytes, allocator);
-    try rsa.setFromBigEndianBytes(&p, &params.dh_prime, allocator);
-    try rsa.setFromBigEndianBytes(&ga, g_a, allocator);
+    try rsa.setFromBigEndianBytes(&b, b_bytes);
+    try rsa.setFromBigEndianBytes(&p, &params.dh_prime);
+    try rsa.setFromBigEndianBytes(&ga, g_a);
 
     // g_b = g^b mod p
     try rsa.modPow(&gb, &g_val, &b, &p, allocator);

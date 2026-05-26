@@ -81,14 +81,13 @@ fn readPlainMsg(transport: *tcp.AnyTransport, io: Io, allocator: Allocator) ![]u
     return payload;
 }
 
-fn writePlainMsg(transport: *tcp.AnyTransport, io: Io, payload: []const u8, allocator: Allocator) !void {
+fn writePlainMsg(transport: *tcp.AnyTransport, io: Io, payload: []const u8) !void {
     const frame_len = 20 + payload.len;
     const padded = ((frame_len + 3) / 4) * 4;
     std.debug.assert(padded <= 544);
     var frame_buf: [544]u8 = undefined;
     const frame = frame_buf[0..padded];
     @memset(frame, 0);
-    _ = allocator;
     std.mem.writeInt(i64, frame[0..8], 0, .little);
     const now_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
     const unix_s = @divTrunc(now_ns, std.time.ns_per_s);
@@ -109,7 +108,7 @@ pub fn perform(transport: *tcp.AnyTransport, io: Io, allocator: Allocator) !Auth
     var w: std.Io.Writer = .fixed(&req_buf);
     try w.writeInt(u32, 0xbe7e8ef1, .little);
     try w.writeAll(&nonce);
-    try writePlainMsg(transport, io, w.buffered(), allocator);
+    try writePlainMsg(transport, io, w.buffered());
 
     // Step 2: resPQ
     const res_pq_raw = try readPlainMsg(transport, io, allocator);
@@ -168,7 +167,7 @@ pub fn perform(transport: *tcp.AnyTransport, io: Io, allocator: Allocator) !Auth
     try ser.bytes(&w2, &q_bytes);
     try w2.writeInt(i64, server_key_fp, .little);
     try ser.bytes(&w2, &encrypted_data);
-    try writePlainMsg(transport, io, w2.buffered(), allocator);
+    try writePlainMsg(transport, io, w2.buffered());
 
     // Step 6: server_DH_params_ok
     const dh_params_raw = try readPlainMsg(transport, io, allocator);
@@ -248,7 +247,7 @@ pub fn perform(transport: *tcp.AnyTransport, io: Io, allocator: Allocator) !Auth
     try sw.writeAll(&nonce);
     try sw.writeAll(&server_nonce);
     try ser.bytes(&sw, ci_padded);
-    try writePlainMsg(transport, io, sw.buffered(), allocator);
+    try writePlainMsg(transport, io, sw.buffered());
 
     // Step 9: dh_gen_ok
     const dh_gen_raw = try readPlainMsg(transport, io, allocator);
