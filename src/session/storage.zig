@@ -9,7 +9,7 @@ pub const SessionData = extern struct {
     _pad: [7]u8 = .{0} ** 7,
 };
 
-pub const SessionStorage = struct {
+pub const Storage = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
 
@@ -18,10 +18,10 @@ pub const SessionStorage = struct {
         save: *const fn (*anyopaque, Io, SessionData) anyerror!void,
     };
 
-    pub fn load(self: SessionStorage, io: Io, dc_id: u8) !?SessionData {
+    pub fn load(self: Storage, io: Io, dc_id: u8) !?SessionData {
         return self.vtable.load(self.ptr, io, dc_id);
     }
-    pub fn save(self: SessionStorage, io: Io, data: SessionData) !void {
+    pub fn save(self: Storage, io: Io, data: SessionData) !void {
         return self.vtable.save(self.ptr, io, data);
     }
 };
@@ -29,10 +29,10 @@ pub const SessionStorage = struct {
 pub const MemoryStorage = struct {
     slots: [6]?SessionData = .{null} ** 6,
 
-    pub fn storage(self: *MemoryStorage) SessionStorage {
+    pub fn storage(self: *MemoryStorage) Storage {
         return .{ .ptr = self, .vtable = &vtable };
     }
-    const vtable = SessionStorage.VTable{ .load = load, .save = save };
+    const vtable = Storage.VTable{ .load = load, .save = save };
     fn load(ptr: *anyopaque, _: Io, dc_id: u8) anyerror!?SessionData {
         const self: *MemoryStorage = @ptrCast(@alignCast(ptr));
         if (dc_id >= self.slots.len) return null;
@@ -52,10 +52,10 @@ pub const FileStorage = struct {
     pub fn init(path: []const u8) FileStorage {
         return .{ .path = path };
     }
-    pub fn storage(self: *FileStorage) SessionStorage {
+    pub fn storage(self: *FileStorage) Storage {
         return .{ .ptr = self, .vtable = &vtable };
     }
-    const vtable = SessionStorage.VTable{ .load = load, .save = save };
+    const vtable = Storage.VTable{ .load = load, .save = save };
     fn load(ptr: *anyopaque, io: Io, dc_id: u8) anyerror!?SessionData {
         const self: *FileStorage = @ptrCast(@alignCast(ptr));
         const file = Io.Dir.cwd().openFile(io, self.path, .{}) catch |err| switch (err) {

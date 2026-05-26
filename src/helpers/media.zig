@@ -1,10 +1,10 @@
 const std = @import("std");
 const types = @import("types");
 const functions = @import("functions");
-const client_mod = @import("../client.zig");
-const upload_mod = @import("../upload.zig");
+const client = @import("../client.zig");
+const upload_file = @import("../upload.zig");
 
-const Context = client_mod.Context;
+const Context = client.Context;
 
 pub const SendMediaOptions = struct {
     caption: []const u8 = "",
@@ -51,7 +51,7 @@ pub const AlbumOptions = struct {
     reply_to: ?i32 = null,
 };
 
-fn peerFromMessage(entities: client_mod.Entities, msg: types.Message_) ?types.InputPeer {
+fn peerFromMessage(entities: client.Entities, msg: types.Message_) ?types.InputPeer {
     return switch (msg.peer_id) {
         .PeerUser => |p| .{ .InputPeerUser = .{
             .user_id = p.user_id,
@@ -71,7 +71,7 @@ pub fn sendPhoto(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         else => return,
     };
     const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    const input_file = try upload_mod.upload(ctx, data, .{ .name = "photo.jpg" });
+    const input_file = try upload_file.upload(ctx, data, .{ .name = "photo.jpg" });
     defer switch (input_file) {
         .InputFile => |f| ctx.allocator.free(f.md5_checksum),
         .InputFileBig, .InputFileStoryDocument => {},
@@ -90,7 +90,7 @@ pub fn sendDocument(ctx: Context, update: types.UpdateNewMessage, data: []const 
         else => return,
     };
     const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    const input_file = try upload_mod.upload(ctx, data, .{ .name = "file" });
+    const input_file = try upload_file.upload(ctx, data, .{ .name = "file" });
     defer switch (input_file) {
         .InputFile => |f| ctx.allocator.free(f.md5_checksum),
         .InputFileBig, .InputFileStoryDocument => {},
@@ -114,7 +114,7 @@ pub fn sendAudio(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         else => return,
     };
     const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    const input_file = try upload_mod.upload(ctx, data, .{ .name = opts.name });
+    const input_file = try upload_file.upload(ctx, data, .{ .name = opts.name });
     defer switch (input_file) {
         .InputFile => |f| ctx.allocator.free(f.md5_checksum),
         .InputFileBig, .InputFileStoryDocument => {},
@@ -142,7 +142,7 @@ pub fn sendVideo(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         else => return,
     };
     const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    const input_file = try upload_mod.upload(ctx, data, .{ .name = opts.name });
+    const input_file = try upload_file.upload(ctx, data, .{ .name = opts.name });
     defer switch (input_file) {
         .InputFile => |f| ctx.allocator.free(f.md5_checksum),
         .InputFileBig, .InputFileStoryDocument => {},
@@ -171,7 +171,7 @@ pub fn sendVoice(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         else => return,
     };
     const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    const input_file = try upload_mod.upload(ctx, data, .{ .name = opts.name });
+    const input_file = try upload_file.upload(ctx, data, .{ .name = opts.name });
     defer switch (input_file) {
         .InputFile => |f| ctx.allocator.free(f.md5_checksum),
         .InputFileBig, .InputFileStoryDocument => {},
@@ -209,7 +209,7 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
     defer ctx.allocator.free(attrs_buf);
 
     for (items, 0..) |item, i| {
-        const input_file = try upload_mod.upload(ctx, item.data, .{ .name = item.name });
+        const input_file = try upload_file.upload(ctx, item.data, .{ .name = item.name });
         if (input_file == .InputFile) checksums[i] = input_file.InputFile.md5_checksum;
         const uploaded: types.InputMedia = switch (item.kind) {
             .photo => .{ .InputMediaUploadedPhoto = .{ .file = input_file } },

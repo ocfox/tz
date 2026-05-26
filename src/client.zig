@@ -1,9 +1,10 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const connector_mod = @import("connector.zig");
-const Connector = connector_mod.Connector;
-const storage_mod = @import("session/storage.zig");
+const connector = @import("connector.zig");
+const Connector = connector.Connector;
+const storage = @import("session/storage.zig");
+const Storage = storage.Storage;
 const codec = @import("codec");
 const types = @import("types");
 const functions = @import("functions");
@@ -14,7 +15,7 @@ pub const HandlerEntry = struct {
 };
 
 var sub_conn_dummy: u8 = 0;
-const sub_conn_noop_handler = connector_mod.UpdateHandler{
+const sub_conn_noop_handler = connector.UpdateHandler{
     .ptr = &sub_conn_dummy,
     .vtable = &.{ .handle = struct {
         fn h(_: *anyopaque, _: Io, _: []const u8) void {}
@@ -104,7 +105,7 @@ pub const Entities = struct {
 };
 
 pub const ClientOptions = struct {
-    dc: connector_mod.DC = connector_mod.default_dcs[1],
+    dc: connector.DC = connector.default_dcs[1],
     bot_token: ?[]const u8 = null,
     /// Called once after the first successful connection, before the update loop.
     /// Receives an opaque pointer to the Client; cast with @ptrCast(@alignCast(ptr)).
@@ -112,7 +113,7 @@ pub const ClientOptions = struct {
     auth_fn: ?*const fn (*anyopaque, Io) anyerror!void = null,
     api_id: i32,
     api_hash: []const u8,
-    storage: storage_mod.SessionStorage,
+    storage: Storage,
 };
 
 /// Client(handlers) — handlers is a comptime-known slice of HandlerEntry.
@@ -127,7 +128,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         dc_resolved: bool = false,
         bot_id: ?i64 = null,
         user_authorized: bool = false,
-        dc_list: ?[]connector_mod.DC = null,
+        dc_list: ?[]connector.DC = null,
         sub_conns: std.AutoHashMapUnmanaged(u8, *Connector) = .empty,
         sub_conns_mu: std.Io.Mutex = std.Io.Mutex.init,
 
@@ -156,7 +157,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     if (err == error.SessionInvalid) {
                         std.log.warn("session invalid, clearing stored session", .{});
                         const dc_id = if (self.primary) |p| p.dc_id else 0;
-                        var blank = std.mem.zeroes(storage_mod.SessionData);
+                        var blank = std.mem.zeroes(storage.SessionData);
                         blank.dc_id = dc_id;
                         self.opts.storage.save(io, blank) catch |e|
                             std.log.warn("failed to clear session: {}", .{e});
@@ -257,7 +258,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const conn = try Connector.connect(io2, self.allocator, .{
                 .dc = dc,
                 .transport = .abridged,
-                .session_storage = self.opts.storage,
+                .storage = self.opts.storage,
                 .api_id = self.opts.api_id,
                 .api_hash = self.opts.api_hash,
             });
@@ -304,8 +305,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         }
 
         fn callRawOnDc(self: *Self, io2: Io, dc_id: u8, bytes: []const u8) ![]u8 {
-            const connector = try self.getOrCreateSubConn(io2, dc_id);
-            return self.callViaConnector(io2, connector, bytes) catch |err| {
+            const conn = try self.getOrCreateSubConn(io2, dc_id);
+            return self.callViaConnector(io2, conn, bytes) catch |err| {
                 self.removeSubConn(io2, dc_id);
                 return err;
             };
@@ -342,7 +343,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 // Slot 0 stores the home DC: auth_key_id holds the DC id, auth_key is zeroed.
                 if (try self.opts.storage.load(io, 0)) |home| {
                     const home_dc: u8 = @truncate(@as(u64, @bitCast(home.auth_key_id)));
-                    if (connector_mod.findDc(home_dc, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
+                    if (connector.findDc(home_dc, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
                 }
                 self.dc_resolved = true;
             }
@@ -350,7 +351,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const c = try Connector.connect(io, self.allocator, .{
                 .dc = self.opts.dc,
                 .transport = .abridged,
-                .session_storage = self.opts.storage,
+                .storage = self.opts.storage,
                 .api_id = self.opts.api_id,
                 .api_hash = self.opts.api_hash,
             });
@@ -371,7 +372,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             }
             self.primary = c;
 
-            const update_handler: connector_mod.UpdateHandler = .{
+            const update_handler: connector.UpdateHandler = .{
                 .ptr = self,
                 .vtable = &.{ .handle = handleUpdate },
             };
@@ -408,7 +409,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         fn fetchDcList(self: *Self, io: Io) !void {
             const config = try self.call(io, functions.help.GetConfig{});
             defer self.allocator.free(config.dc_options);
-            var list: std.ArrayList(connector_mod.DC) = .empty;
+            var list: std.ArrayList(connector.DC) = .empty;
             defer list.deinit(self.allocator);
             for (config.dc_options) |opt| {
                 if (opt.cdn.value != null) continue;
@@ -439,13 +440,13 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             }
         }
 
-        fn findDc(self: *const Self, dc_id: u8) ?connector_mod.DC {
+        fn findDc(self: *const Self, dc_id: u8) ?connector.DC {
             if (self.dc_list) |list| {
                 for (list) |dc| {
                     if (dc.id == dc_id) return dc;
                 }
             }
-            return connector_mod.findDc(dc_id, self.opts.dc.test_server);
+            return connector.findDc(dc_id, self.opts.dc.test_server);
         }
 
         fn callRaw(self: *Self, io: Io, bytes: []const u8) ![]u8 {

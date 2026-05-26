@@ -1,9 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const flags_mod = @import("flags.zig");
-const isFlag = flags_mod.isFlag;
-const isFlags = flags_mod.isFlags;
-const isFlags2 = flags_mod.isFlags2;
+const flags = @import("flags.zig");
+const isFlag = flags.isFlag;
+const isFlags = flags.isFlags;
+const isFlags2 = flags.isFlags2;
 
 const cid_vector: u32 = 0x1cb5c415;
 const cid_bool_true: u32 = 0x997275b5;

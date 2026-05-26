@@ -1,9 +1,9 @@
 const std = @import("std");
 const types = @import("types");
 const functions = @import("functions");
-const client_mod = @import("client.zig");
+const client = @import("client.zig");
 
-const Context = client_mod.Context;
+const Context = client.Context;
 
 const big_threshold = 10 * 1024 * 1024; // 10 MB
 const part_size = 128 * 1024; // 128 KB
@@ -17,7 +17,7 @@ pub const UploadOptions = struct {
 /// caller must free it: ctx.allocator.free(result.InputFile.md5_checksum).
 /// For large files the InputFileBig variant is returned and no extra free is needed.
 pub fn upload(ctx: Context, data: []const u8, opts: UploadOptions) !types.InputFile {
-    const file_id = client_mod.nextRandomId();
+    const file_id = client.nextRandomId();
     const n_parts: i32 = @intCast((data.len + part_size - 1) / part_size);
     const is_big = data.len > big_threshold;
 

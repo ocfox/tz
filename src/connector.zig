@@ -1,11 +1,12 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const transport_mod = @import("transport.zig");
-const session_mod = @import("session/message.zig");
-const storage_mod = @import("session/storage.zig");
-const auth_key_mod = @import("session/auth_key.zig");
-const mtproto_mod = @import("mtproto.zig");
+const transport = @import("transport.zig");
+const Transport = transport.Transport;
+const Session = @import("session/message.zig").Session;
+const Storage = @import("session/storage.zig").Storage;
+const auth_key = @import("session/auth_key.zig");
+const mtproto = @import("mtproto.zig");
 
 pub const DC = struct {
     id: u8,
@@ -26,8 +27,8 @@ pub const default_dcs: []const DC = &.{
 
 pub const ConnectOptions = struct {
     dc: DC,
-    transport: transport_mod.Mode = .abridged,
-    session_storage: storage_mod.SessionStorage,
+    transport: transport.Mode = .abridged,
+    storage: Storage,
     api_id: i32,
     api_hash: []const u8,
 };
@@ -60,7 +61,7 @@ const MtpHandler = struct {
     }
 };
 
-const MtpImpl = mtproto_mod.MtProto(MtpHandler);
+const MtpImpl = mtproto.MtProto(MtpHandler);
 
 /// Manages a single MTProto connection: connects, authenticates the transport,
 /// dispatches updates asynchronously, and exposes call() for RPC.
@@ -73,18 +74,18 @@ pub const Connector = struct {
     initialized: bool = false,
     api_id: i32,
     api_hash: []const u8,
-    session_storage: storage_mod.SessionStorage,
+    storage: Storage,
     dc_id: u8,
 
     pub fn connect(io: Io, allocator: Allocator, opts: ConnectOptions) !*Connector {
         const stream = try opts.dc.addr.connect(io, .{ .mode = .stream });
-        var transport = transport_mod.Transport.init(stream, opts.transport);
+        var conn = Transport.init(stream, opts.transport);
 
         const auth_key_result = blk: {
-            if (try opts.session_storage.load(io, opts.dc.id)) |saved| {
+            if (try opts.storage.load(io, opts.dc.id)) |saved| {
                 if (saved.dc_id != 0 and saved.dc_id == opts.dc.id) {
                     std.log.info("loaded existing session (dc={})", .{saved.dc_id});
-                    break :blk auth_key_mod.AuthKeyResult{
+                    break :blk auth_key.Result{
                         .auth_key = saved.auth_key,
                         .auth_key_id = saved.auth_key_id,
                         .server_salt = saved.server_salt,
@@ -96,9 +97,9 @@ pub const Connector = struct {
                 }
             }
             std.log.info("performing DH key exchange", .{});
-            const result = try auth_key_mod.perform(&transport, io, allocator);
+            const result = try auth_key.perform(&conn, io, allocator);
             std.log.info("DH key exchange complete", .{});
-            try opts.session_storage.save(io, .{
+            try opts.storage.save(io, .{
                 .auth_key = result.auth_key,
                 .auth_key_id = result.auth_key_id,
                 .server_salt = result.server_salt,
@@ -107,7 +108,7 @@ pub const Connector = struct {
             break :blk result;
         };
 
-        const session = session_mod.Session.init(
+        const mtp_session = Session.init(
             auth_key_result.auth_key,
             auth_key_result.auth_key_id,
             auth_key_result.server_salt,
@@ -124,10 +125,10 @@ pub const Connector = struct {
             .update_handler = undefined,
             .api_id = opts.api_id,
             .api_hash = opts.api_hash,
-            .session_storage = opts.session_storage,
+            .storage = opts.storage,
             .dc_id = opts.dc.id,
         };
-        self.mtp = try MtpImpl.init(allocator, transport, session, &self.mtp_handler);
+        self.mtp = try MtpImpl.init(allocator, conn, mtp_session, &self.mtp_handler);
         return self;
     }
 
@@ -156,7 +157,7 @@ pub const Connector = struct {
     /// Persist current session (with latest server_salt) back to storage.
     pub fn saveSession(self: *Connector, io: Io) void {
         const s = &self.mtp.session;
-        self.session_storage.save(io, .{
+        self.storage.save(io, .{
             .auth_key = s.auth_key,
             .auth_key_id = s.auth_key_id,
             .server_salt = s.server_salt,

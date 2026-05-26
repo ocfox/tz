@@ -1,9 +1,9 @@
 const std = @import("std");
 const types = @import("types");
 const functions = @import("functions");
-const client_mod = @import("client.zig");
+const client = @import("client.zig");
 
-const Context = client_mod.Context;
+const Context = client.Context;
 
 const chunk_size: i32 = 512 * 1024;
 

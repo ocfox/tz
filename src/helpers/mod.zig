@@ -1,18 +1,18 @@
 const std = @import("std");
 const types = @import("types");
 const functions = @import("functions");
-const client_mod = @import("../client.zig");
-const upload_mod = @import("../upload.zig");
-const download_mod = @import("../download.zig");
+const client = @import("../client.zig");
+const upload_file = @import("../upload.zig");
+const download_file = @import("../download.zig");
 
-pub const Context = client_mod.Context;
-pub const Entities = client_mod.Entities;
+pub const Context = client.Context;
+pub const Entities = client.Entities;
 
-pub const upload = upload_mod.upload;
-pub const UploadOptions = upload_mod.UploadOptions;
-pub const download = download_mod.download;
-pub const documentLocation = download_mod.documentLocation;
-pub const photoLocation = download_mod.photoLocation;
+pub const upload = upload_file.upload;
+pub const UploadOptions = upload_file.UploadOptions;
+pub const download = download_file.download;
+pub const documentLocation = download_file.documentLocation;
+pub const photoLocation = download_file.photoLocation;
 
 // media
 const media = @import("media.zig");
@@ -38,9 +38,8 @@ pub const inlineRow = keyboard.inlineRow;
 pub const inlineKeyboard = keyboard.inlineKeyboard;
 
 // text
-const text_mod = @import("text.zig");
-pub const FormattedText = text_mod.FormattedText;
-pub const utf16Len = text_mod.utf16Len;
+pub const FormattedText = @import("text.zig").FormattedText;
+pub const utf16Len = @import("text.zig").utf16Len;
 
 pub const ReplyOptions = struct {
     reply_to: ?i32 = null,

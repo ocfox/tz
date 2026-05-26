@@ -1,7 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const transport_mod = @import("../transport.zig");
+const Transport = @import("../transport.zig").Transport;
 const sha = @import("../crypto/sha.zig");
 const rsa = @import("../crypto/rsa.zig");
 const dh = @import("../crypto/dh.zig");
@@ -28,7 +28,7 @@ const server_key_n: [256]u8 = .{
 };
 const server_key_fp: i64 = -4344800451088585951;
 
-pub const AuthKeyResult = struct {
+pub const Result = struct {
     auth_key: [256]u8,
     auth_key_id: i64,
     server_salt: i64,
@@ -70,7 +70,7 @@ fn gcd(a: u64, b: u64) u64 {
     return x;
 }
 
-fn readPlainMsg(transport: *transport_mod.Transport, io: Io, allocator: Allocator) ![]u8 {
+fn readPlainMsg(transport: *Transport, io: Io, allocator: Allocator) ![]u8 {
     const frame = try transport.readFrame(io, allocator);
     errdefer allocator.free(frame);
     if (frame.len < 20) return error.TooShort;
@@ -81,7 +81,7 @@ fn readPlainMsg(transport: *transport_mod.Transport, io: Io, allocator: Allocato
     return payload;
 }
 
-fn writePlainMsg(transport: *transport_mod.Transport, io: Io, payload: []const u8) !void {
+fn writePlainMsg(transport: *Transport, io: Io, payload: []const u8) !void {
     const frame_len = 20 + payload.len;
     const padded = ((frame_len + 3) / 4) * 4;
     std.debug.assert(padded <= 544);
@@ -99,7 +99,7 @@ fn writePlainMsg(transport: *transport_mod.Transport, io: Io, payload: []const u
     try transport.writeFrame(io, frame);
 }
 
-pub fn perform(transport: *transport_mod.Transport, io: Io, allocator: Allocator) !AuthKeyResult {
+pub fn perform(transport: *Transport, io: Io, allocator: Allocator) !Result {
     // Step 1: req_pq_multi
     var nonce: [16]u8 = undefined;
     io.random(&nonce);
@@ -265,7 +265,7 @@ pub fn perform(transport: *transport_mod.Transport, io: Io, allocator: Allocator
     var server_salt: i64 = undefined;
     for (std.mem.asBytes(&server_salt), new_nonce[0..8], server_nonce[0..8]) |*o, a, b| o.* = a ^ b;
 
-    return AuthKeyResult{
+    return Result{
         .auth_key = dh_result.secret,
         .auth_key_id = auth_key_id,
         .server_salt = server_salt,

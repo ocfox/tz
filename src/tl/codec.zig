@@ -1,7 +1,7 @@
 const std = @import("std");
 const enc = @import("encode.zig");
 const dec = @import("decode.zig");
-const flags_mod = @import("flags.zig");
+const flags = @import("flags.zig");
 
 pub const serialize = @import("serialize.zig");
 pub const deserialize = @import("deserialize.zig");
@@ -13,13 +13,13 @@ pub const initRandom = enc.initRandom;
 pub const decode = dec.decode;
 pub const decodeStructBody = dec.decodeStructBody;
 
-pub const Flags = flags_mod.Flags;
-pub const Flags2 = flags_mod.Flags2;
-pub const Flag = flags_mod.Flag;
-pub const Flag2 = flags_mod.Flag2;
-pub const isFlag = flags_mod.isFlag;
-pub const isFlags = flags_mod.isFlags;
-pub const isFlags2 = flags_mod.isFlags2;
+pub const Flags = flags.Flags;
+pub const Flags2 = flags.Flags2;
+pub const Flag = flags.Flag;
+pub const Flag2 = flags.Flag2;
+pub const isFlag = flags.isFlag;
+pub const isFlags = flags.isFlags;
+pub const isFlags2 = flags.isFlags2;
 
 test "encode/decode primitives" {
     const a = std.testing.allocator;
