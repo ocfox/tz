@@ -91,18 +91,24 @@ fn decodeVector(comptime Child: type, r: *std.Io.Reader, allocator: Allocator) a
     return slice;
 }
 
+fn decompressGzip(r: *std.Io.Reader, allocator: Allocator) ![]u8 {
+    const compressed = try de.bytes(r, allocator);
+    defer allocator.free(compressed);
+    var in = std.Io.Reader.fixed(compressed);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
+    var decomp: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
+    _ = try decomp.reader.streamRemaining(&aw.writer);
+    return allocator.dupe(u8, aw.written());
+}
+
 fn decodeStruct(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerror!T {
     if (@hasDecl(T, "cid")) {
         const cid = try r.takeInt(u32, .little);
         if (cid == 0x3072cfa1) { // gzip_packed
-            const compressed = try de.bytes(r, allocator);
-            defer allocator.free(compressed);
-            var in = std.Io.Reader.fixed(compressed);
-            var aw: std.Io.Writer.Allocating = .init(allocator);
-            defer aw.deinit();
-            var decomp: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
-            _ = try decomp.reader.streamRemaining(&aw.writer);
-            var dr = std.Io.Reader.fixed(aw.written());
+            const data = try decompressGzip(r, allocator);
+            defer allocator.free(data);
+            var dr = std.Io.Reader.fixed(data);
             return decodeStruct(T, &dr, allocator);
         }
         if (cid != T.cid) return error.UnexpectedConstructor;
@@ -113,15 +119,9 @@ fn decodeStruct(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyer
 fn decodeUnion(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerror!T {
     const cid = try r.takeInt(u32, .little);
     if (cid == 0x3072cfa1) { // gzip_packed
-        const compressed = try de.bytes(r, allocator);
-        defer allocator.free(compressed);
-        var in = std.Io.Reader.fixed(compressed);
-        var aw: std.Io.Writer.Allocating = .init(allocator);
-        defer aw.deinit();
-        var decomp: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
-        _ = try decomp.reader.streamRemaining(&aw.writer);
-        const decompressed = aw.written();
-        var dr = std.Io.Reader.fixed(decompressed);
+        const data = try decompressGzip(r, allocator);
+        defer allocator.free(data);
+        var dr = std.Io.Reader.fixed(data);
         return decodeUnion(T, &dr, allocator);
     }
     inline for (std.meta.fields(T)) |field| {
