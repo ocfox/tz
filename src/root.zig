@@ -27,5 +27,5 @@ test {
     _ = @import("crypto/rsa.zig");
     _ = @import("crypto/dh.zig");
     _ = @import("crypto/aes_ige.zig");
-    _ = @import("session/message.zig");
+    _ = @import("session/encrypt.zig");
 }

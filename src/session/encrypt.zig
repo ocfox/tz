@@ -10,6 +10,7 @@ pub const Session = struct {
     server_salt: i64,
     session_id: i64,
     seq_no: u32 = 0,
+    last_msg_id: i64 = 0,
     encrypt_scratch: std.ArrayListUnmanaged(u8) = .empty,
     decrypt_scratch: std.ArrayListUnmanaged(u8) = .empty,
 
@@ -29,12 +30,16 @@ pub const Session = struct {
         self.decrypt_scratch.deinit(allocator);
     }
 
-    pub fn nextMsgId(_: *Session, io: Io) i64 {
+    pub fn nextMsgId(self: *Session, io: Io) i64 {
         const now_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
         const unix_s = @divTrunc(now_ns, std.time.ns_per_s);
         const frac = @rem(now_ns, std.time.ns_per_s);
-        const msg_id = (unix_s << 32) | (@divTrunc(frac, std.time.ns_per_s / 4) * 4);
-        return @intCast(msg_id);
+        const unix_s_u: u64 = @intCast(unix_s);
+        const frac_u: u64 = @intCast(frac & ~@as(@TypeOf(frac), 3));
+        var id: i64 = @bitCast((unix_s_u << 32) | frac_u);
+        if (id <= self.last_msg_id) id = self.last_msg_id + 4;
+        self.last_msg_id = id;
+        return id;
     }
 
     pub fn nextSeqNo(self: *Session, content_related: bool) u32 {

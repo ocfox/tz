@@ -2,7 +2,7 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Transport = @import("transport.zig").Transport;
-const Session = @import("session/message.zig").Session;
+const Session = @import("session/encrypt.zig").Session;
 const codec = @import("codec");
 const types = @import("types");
 
