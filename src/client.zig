@@ -324,16 +324,19 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 return error.AuthTransferFailed;
         }
 
-        fn markHomeDc(self: *Self) void {
-            if (self.primary) |c| c.home_dc = self.opts.dc.id;
+        fn markHomeDc(self: *Self, io: Io) void {
+            if (self.primary) |c| {
+                c.is_home = true;
+                c.saveSession(io);
+            }
         }
 
         fn runOnce(self: *Self, io: Io) !void {
             if (!self.dc_resolved) {
                 scan: for (1..storage.max_dc_id + 1) |id| {
                     const slot = try self.opts.storage.load(io, @intCast(id)) orelse continue;
-                    if (slot.home_dc != 0) {
-                        if (connector.findDc(slot.home_dc, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
+                    if (slot.is_home) {
+                        if (connector.findDc(slot.dc_id, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
                         break :scan;
                     }
                 }
@@ -381,13 +384,13 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                         else => return err,
                     };
                     std.log.info("bot authenticated", .{});
-                    self.markHomeDc();
+                    self.markHomeDc(io);
                 }
             } else if (self.opts.auth_fn) |f| {
                 if (!self.user_authorized) {
                     try f(self, io);
                     self.user_authorized = true;
-                    self.markHomeDc();
+                    self.markHomeDc(io);
                 }
             }
             self.exec(io, functions.updates.GetState{}) catch |err|

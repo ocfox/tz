@@ -72,7 +72,7 @@ pub const Connector = struct {
     update_group: std.Io.Group = .init,
     update_handler: UpdateHandler,
     initialized: bool = false,
-    home_dc: u8 = 0,
+    is_home: bool = false,
     api_id: i32,
     api_hash: []const u8,
     storage: Storage,
@@ -163,7 +163,7 @@ pub const Connector = struct {
             .auth_key_id = s.auth_key_id,
             .server_salt = s.server_salt,
             .dc_id = self.dc_id,
-            .home_dc = self.home_dc,
+            .is_home = self.is_home,
         }) catch |err| std.log.warn("failed to save session: {}", .{err});
     }
 

@@ -6,7 +6,7 @@ pub const SessionData = extern struct {
     auth_key_id: i64,
     server_salt: i64,
     dc_id: u8,
-    home_dc: u8 = 0,
+    is_home: bool = false,
     _pad: [6]u8 = .{0} ** 6,
 };
 
@@ -98,7 +98,7 @@ test "MemoryStorage load/save roundtrip" {
     data.auth_key_id = 12345;
     data.server_salt = -99;
     data.dc_id = 2;
-    data.home_dc = 0;
+    data.is_home = false;
     try s.save(std.Io.failing, data);
     const loaded = try s.load(std.Io.failing, 2);
     try std.testing.expect(loaded != null);
@@ -118,7 +118,7 @@ test "FileStorage load/save roundtrip" {
     data.auth_key_id = 99999;
     data.server_salt = 42;
     data.dc_id = 1;
-    data.home_dc = 0;
+    data.is_home = false;
     try s.save(io, data);
     const loaded = (try s.load(io, 1)).?;
     try std.testing.expectEqualSlices(u8, &data.auth_key, &loaded.auth_key);
