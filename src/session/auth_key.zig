@@ -90,10 +90,10 @@ fn writePlainMsg(transport: *Transport, io: Io, payload: []const u8) !void {
     @memset(frame, 0);
     std.mem.writeInt(i64, frame[0..8], 0, .little);
     const now_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
-    const unix_s = @divTrunc(now_ns, std.time.ns_per_s);
-    const frac = @rem(now_ns, std.time.ns_per_s);
-    const msg_id = (unix_s << 32) | (@divTrunc(frac, std.time.ns_per_s / 4) * 4);
-    std.mem.writeInt(i64, frame[8..16], @intCast(msg_id), .little);
+    const unix_s: u64 = @intCast(@divTrunc(now_ns, std.time.ns_per_s));
+    const frac: u64 = @intCast(@rem(now_ns, std.time.ns_per_s) & ~@as(i128, 3));
+    const msg_id: i64 = @bitCast((unix_s << 32) | frac);
+    std.mem.writeInt(i64, frame[8..16], msg_id, .little);
     std.mem.writeInt(u32, frame[16..20], @intCast(payload.len), .little);
     @memcpy(frame[20..][0..payload.len], payload);
     try transport.writeFrame(io, frame);
