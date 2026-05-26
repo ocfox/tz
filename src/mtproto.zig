@@ -41,6 +41,9 @@ pub fn MtProto(comptime Handler: type) type {
         pending: std.AutoHashMap(i64, *PendingRequest),
         pending_mutex: std.Io.Mutex = .init,
         pending_acks: std.ArrayListUnmanaged(i64) = .empty,
+        salts: std.ArrayListUnmanaged(types.FutureSalt) = .empty,
+        salt_valid_until: i64 = 0,
+        server_time_offset: i64 = 0,
         pong_event: std.Io.Event = .unset,
         select_buf: [3]LoopResult,
         select: ?std.Io.Select(LoopResult) = null,
@@ -70,6 +73,7 @@ pub fn MtProto(comptime Handler: type) type {
         }
 
         pub fn deinit(self: *Self) void {
+            self.salts.deinit(self.allocator);
             self.pending_acks.deinit(self.allocator);
             self.pending.deinit();
             self.session.deinit(self.allocator);
@@ -176,6 +180,7 @@ pub fn MtProto(comptime Handler: type) type {
                     try self.dispatch(io, aw.written(), 0);
                 },
                 types.MsgsAck.cid => {},
+                types.FutureSalts.cid => self.parseFutureSalts(payload, io),
                 types.NewSessionCreated.cid => {
                     if (payload.len >= 28) {
                         self.session.server_salt = std.mem.readInt(i64, payload[20..28], .little);
@@ -320,8 +325,10 @@ pub fn MtProto(comptime Handler: type) type {
 
         fn pingLoop(self: *Self, io: Io) anyerror!void {
             const funcs = @import("functions");
+            self.fetchSalts(io);
             while (true) {
                 std.Io.sleep(io, std.Io.Duration.fromSeconds(60), .awake) catch break;
+                self.checkSaltRefresh(io);
 
                 var ping_id_bytes: [8]u8 = undefined;
                 io.random(&ping_id_bytes);
@@ -345,6 +352,69 @@ pub fn MtProto(comptime Handler: type) type {
                     break;
                 };
             }
+        }
+
+        fn fetchSalts(self: *Self, io: Io) void {
+            const funcs = @import("functions");
+            var req_buf: [8]u8 = undefined;
+            var w: std.Io.Writer = .fixed(&req_buf);
+            codec.encode(funcs.GetFutureSalts{ .num = 64 }, &w) catch return;
+            const raw = self.call(io, w.buffered()) catch return;
+            defer self.allocator.free(raw);
+            self.parseFutureSalts(raw, io);
+        }
+
+        fn parseFutureSalts(self: *Self, raw: []const u8, io: Io) void {
+            if (raw.len < 24) return;
+            if (std.mem.readInt(u32, raw[0..4], .little) != types.FutureSalts.cid) return;
+            const server_now = std.mem.readInt(i32, raw[12..16], .little);
+            // raw[16..20] is the vector cid; skip it
+            const count = std.mem.readInt(u32, raw[20..24], .little);
+            const local_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
+            self.server_time_offset = @as(i64, server_now) - @divTrunc(local_ns, std.time.ns_per_s);
+            self.salts.clearRetainingCapacity();
+            var i: usize = 0;
+            while (i < count) : (i += 1) {
+                const base = 24 + @sizeOf(types.FutureSalt) * i;
+                if (base + @sizeOf(types.FutureSalt) > raw.len) break;
+                self.salts.append(self.allocator, .{
+                    .valid_since = std.mem.readInt(i32, raw[base..][0..4], .little),
+                    .valid_until = std.mem.readInt(i32, raw[base + 4 ..][0..4], .little),
+                    .salt = std.mem.readInt(i64, raw[base + 8 ..][0..8], .little),
+                }) catch break;
+            }
+            self.applySalt(server_now);
+        }
+
+        fn serverNow(self: *Self, io: Io) i64 {
+            const local_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
+            return @divTrunc(local_ns, std.time.ns_per_s) + self.server_time_offset;
+        }
+
+        fn applySalt(self: *Self, server_now: i32) void {
+            for (self.salts.items) |s| {
+                if (s.valid_since <= server_now and server_now < s.valid_until) {
+                    if (s.salt != self.session.server_salt) {
+                        std.log.debug("salt switched (valid until {})", .{s.valid_until});
+                        self.session.server_salt = s.salt;
+                        self.salt_valid_until = @as(i64, s.valid_until);
+                    }
+                    return;
+                }
+            }
+        }
+
+        fn checkSaltRefresh(self: *Self, io: Io) void {
+            const now = self.serverNow(io);
+            // Switch salt if within 5 minutes of expiry
+            if (now + 300 < self.salt_valid_until) return;
+            self.applySalt(@intCast(now & 0x7fffffff));
+            // Refetch if few future salts remain
+            var ahead: usize = 0;
+            for (self.salts.items) |s| {
+                if (@as(i64, s.valid_since) > now) ahead += 1;
+            }
+            if (ahead < 4) self.fetchSalts(io);
         }
     };
 }
