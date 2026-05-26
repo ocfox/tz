@@ -301,11 +301,10 @@ pub fn MtProto(comptime Handler: type) type {
                 io.random(&ping_id_bytes);
                 const ping_id = std.mem.readInt(i64, &ping_id_bytes, .little);
 
-                const bytes = codec.encodeAlloc(
-                    funcs.PingDelayDisconnect{ .ping_id = ping_id, .disconnect_delay = 75 },
-                    self.allocator,
-                ) catch break;
-                defer self.allocator.free(bytes);
+                var ping_buf: [32]u8 = undefined;
+                var pw: std.Io.Writer = .fixed(&ping_buf);
+                codec.encode(funcs.PingDelayDisconnect{ .ping_id = ping_id, .disconnect_delay = 75 }, &pw) catch break;
+                const bytes = pw.buffered();
                 self.pong_event.reset();
                 const enc = self.session.encrypt(bytes, self.allocator, io) catch break;
                 self.write_queue.putOne(io, enc.data) catch {
