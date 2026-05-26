@@ -55,10 +55,10 @@ pub const Context = struct {
 
     /// Send a typed TL request, return the decoded response.
     pub fn call(self: Context, request: anytype) !@TypeOf(request).Response {
-        var fba_buf: [4096]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
-        const bytes = try codec.encodeAlloc(request, fba.allocator());
-        const raw = try self.callFn(self.client, self.io, bytes);
+        var buf: [4096]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        try codec.encode(request, &w);
+        const raw = try self.callFn(self.client, self.io, w.buffered());
         defer self.allocator.free(raw);
         var r: std.Io.Reader = .fixed(raw);
         return codec.decode(@TypeOf(request).Response, &r, self.allocator);
@@ -66,10 +66,10 @@ pub const Context = struct {
 
     /// Send a typed TL request, discard the response. No heap allocation for decoding.
     pub fn exec(self: Context, request: anytype) !void {
-        var fba_buf: [4096]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
-        const bytes = try codec.encodeAlloc(request, fba.allocator());
-        const raw = try self.callFn(self.client, self.io, bytes);
+        var buf: [4096]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        try codec.encode(request, &w);
+        const raw = try self.callFn(self.client, self.io, w.buffered());
         self.allocator.free(raw);
     }
 
@@ -178,10 +178,10 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         /// Send a typed TL request, return the decoded response.
         pub fn call(self: *Self, io: Io, request: anytype) !@TypeOf(request).Response {
-            var fba_buf: [4096]u8 = undefined;
-            var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
-            const bytes = try codec.encodeAlloc(request, fba.allocator());
-            const raw = try self.callRaw(io, bytes);
+            var buf: [4096]u8 = undefined;
+            var w: std.Io.Writer = .fixed(&buf);
+            try codec.encode(request, &w);
+            const raw = try self.callRaw(io, w.buffered());
             defer self.allocator.free(raw);
             if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid) {
                 try self.handleRpcError(io, raw);
@@ -192,10 +192,10 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         }
 
         fn exec(self: *Self, io: Io, request: anytype) !void {
-            var fba_buf: [4096]u8 = undefined;
-            var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
-            const bytes = try codec.encodeAlloc(request, fba.allocator());
-            const raw = try self.callRaw(io, bytes);
+            var buf: [4096]u8 = undefined;
+            var w: std.Io.Writer = .fixed(&buf);
+            try codec.encode(request, &w);
+            const raw = try self.callRaw(io, w.buffered());
             defer self.allocator.free(raw);
             if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid)
                 return self.handleRpcError(io, raw);
@@ -316,13 +316,13 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .dc_id = @intCast(dc_id),
             });
             defer self.allocator.free(exported.bytes);
-            var fba_buf: [512]u8 = undefined;
-            var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
-            const import_bytes = try codec.encodeAlloc(functions.auth.ImportAuthorization{
+            var buf: [512]u8 = undefined;
+            var w: std.Io.Writer = .fixed(&buf);
+            try codec.encode(functions.auth.ImportAuthorization{
                 .id = exported.id,
                 .bytes = exported.bytes,
-            }, fba.allocator());
-            const raw = try self.callViaConnector(io2, sub, import_bytes);
+            }, &w);
+            const raw = try self.callViaConnector(io2, sub, w.buffered());
             defer self.allocator.free(raw);
             if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid)
                 return error.AuthTransferFailed;

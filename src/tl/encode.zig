@@ -26,7 +26,7 @@ pub fn encode(value: anytype, writer: *std.Io.Writer) !void {
     try encodeWriter(@TypeOf(value), value, writer);
 }
 
-fn encodeWriter(comptime T: type, value: T, w: *std.Io.Writer) !void {
+fn encodeWriter(comptime T: type, value: T, w: *std.Io.Writer) anyerror!void {
     switch (@typeInfo(T)) {
         .int, .comptime_int => try w.writeInt(T, value, .little),
         .float => {
