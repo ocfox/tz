@@ -397,6 +397,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     self.saveHomeDc(io);
                 }
             }
+            self.exec(io, functions.updates.GetState{}) catch |err|
+                std.log.warn("failed to sync update state: {}", .{err});
             self.fetchDcList(io) catch |err|
                 std.log.warn("failed to fetch DC list: {}", .{err});
             std.log.info("waiting for updates", .{});
@@ -435,7 +437,6 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 },
                 else => {},
             }
-            try self.exec(io, functions.updates.GetState{});
         }
 
         fn findDc(self: *const Self, dc_id: u8) ?connector_mod.DC {
