@@ -140,7 +140,7 @@ pub fn sendChatAction(ctx: Context, peer: types.InputPeer, action: types.SendMes
 }
 
 /// Fetch the bot's own User record. Caller owns the returned slice (ctx.allocator.free).
-pub fn getMe(ctx: Context) ![]types.User {
+pub fn getMe(ctx: Context) ![]const types.User {
     var id = [_]types.InputUser{.{ .InputUserSelf = .{} }};
     return ctx.call(functions.users.GetUsers{ .id = &id });
 }
@@ -170,7 +170,7 @@ pub fn answerInlineQuery(ctx: Context, update: types.UpdateBotInlineQuery, resul
         .gallery = if (opts.is_gallery) .some({}) else .none,
         .private = if (opts.is_private) .some({}) else .none,
         .query_id = update.query_id,
-        .results = @constCast(results),
+        .results = results,
         .cache_time = opts.cache_time,
         .next_offset = if (opts.next_offset) |o| .some(o) else .none,
     });
@@ -194,11 +194,11 @@ pub fn removeReaction(ctx: Context, peer: types.InputPeer, msg_id: i32) !void {
     });
 }
 
-pub fn getUsers(ctx: Context, ids: []types.InputUser) ![]types.User {
+pub fn getUsers(ctx: Context, ids: []const types.InputUser) ![]const types.User {
     return ctx.call(functions.users.GetUsers{ .id = ids });
 }
 
-pub fn getChats(ctx: Context, ids: []i64) ![]types.Chat {
+pub fn getChats(ctx: Context, ids: []const i64) ![]const types.Chat {
     const res = try ctx.call(functions.messages.GetChats{ .id = ids });
     return switch (res) {
         .MessagesChats => |r| r.chats,
@@ -206,7 +206,7 @@ pub fn getChats(ctx: Context, ids: []i64) ![]types.Chat {
     };
 }
 
-pub fn getChannels(ctx: Context, ids: []types.InputChannel) ![]types.Chat {
+pub fn getChannels(ctx: Context, ids: []const types.InputChannel) ![]const types.Chat {
     const res = try ctx.call(functions.channels.GetChannels{ .id = ids });
     return switch (res) {
         .MessagesChats => |r| r.chats,

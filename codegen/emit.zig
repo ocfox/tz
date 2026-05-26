@@ -28,15 +28,15 @@ fn tlTypeToZig(
 
     if (std.mem.indexOfScalar(u8, tl_type, '<')) |lt| {
         const inner = try tlTypeToZig(tl_type[lt + 1 .. tl_type.len - 1], union_types, single_types, arena, qualify_unions, false);
-        return std.fmt.allocPrint(arena, "[]{s}", .{inner});
+        return std.fmt.allocPrint(arena, "[]const {s}", .{inner});
     }
     if (std.mem.startsWith(u8, tl_type, "Vector ")) {
         const inner = try tlTypeToZig(tl_type[7..], union_types, single_types, arena, qualify_unions, false);
-        return std.fmt.allocPrint(arena, "[]{s}", .{inner});
+        return std.fmt.allocPrint(arena, "[]const {s}", .{inner});
     }
     if (std.mem.startsWith(u8, tl_type, "%Vector ")) {
         const inner = try tlTypeToZig(tl_type[8..], union_types, single_types, arena, qualify_unions, false);
-        return std.fmt.allocPrint(arena, "[]{s}", .{inner});
+        return std.fmt.allocPrint(arena, "[]const {s}", .{inner});
     }
 
     if (union_types.contains(tl_type)) {
