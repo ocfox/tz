@@ -3,8 +3,9 @@ const enc = @import("encode.zig");
 const dec = @import("decode.zig");
 const flags = @import("flags.zig");
 
-pub const serialize = @import("serialize.zig");
-pub const deserialize = @import("deserialize.zig");
+pub const wire = @import("wire.zig");
+pub const serialize = wire.write;
+pub const deserialize = wire.read;
 
 pub const encodeAlloc = enc.encodeAlloc;
 pub const encode = enc.encode;

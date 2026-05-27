@@ -1,5 +1,5 @@
 const std = @import("std");
-const connector = @import("connector.zig");
+const Connector = @import("Connector.zig");
 const client = @import("client.zig");
 
 pub const types = @import("types");
@@ -10,16 +10,14 @@ pub const ClientOptions = client.ClientOptions;
 pub const Context = client.Context;
 pub const handler = client.handler;
 
-pub const storage = @import("session/storage.zig");
+pub const Storage = @import("Storage.zig");
 
-pub const DC = connector.DC;
-pub const default_dcs = connector.default_dcs;
+pub const DC = Connector.DC;
+pub const default_dcs = Connector.default_dcs;
 
-pub const helpers = @import("helpers/mod.zig");
+pub const helpers = @import("helpers.zig");
 
-pub const crypto = struct {
-    pub const srp = @import("crypto/srp.zig");
-};
+pub const crypto = @import("crypto.zig");
 
 test {
     std.testing.refAllDecls(@This());
@@ -27,5 +25,5 @@ test {
     _ = @import("crypto/rsa.zig");
     _ = @import("crypto/dh.zig");
     _ = @import("crypto/aes_ige.zig");
-    _ = @import("session/encrypt.zig");
+    _ = @import("mtproto/Session.zig");
 }

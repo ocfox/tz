@@ -1,14 +1,14 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const Transport = @import("../transport.zig").Transport;
+const Transport = @import("../Transport.zig");
 const sha = @import("../crypto/sha.zig");
 const rsa = @import("../crypto/rsa.zig");
 const dh = @import("../crypto/dh.zig");
 const ser = @import("codec").serialize;
 const de = @import("codec").deserialize;
 
-const server_key_n: [256]u8 = .{
+const serverKeyN: [256]u8 = .{
     0xc1, 0x50, 0x02, 0x3e, 0x2f, 0x70, 0xdb, 0x79, 0x85, 0xde, 0xd0, 0x64, 0x75, 0x9c, 0xfe, 0xcf,
     0x0a, 0xf3, 0x28, 0xe6, 0x9a, 0x41, 0xda, 0xf4, 0xd6, 0xf0, 0x1b, 0x53, 0x81, 0x35, 0xa6, 0xf9,
     0x1f, 0x8f, 0x8b, 0x2a, 0x0e, 0xc9, 0xba, 0x97, 0x20, 0xce, 0x35, 0x2e, 0xfc, 0xf6, 0xc5, 0x68,
@@ -26,7 +26,7 @@ const server_key_n: [256]u8 = .{
     0x5a, 0x8b, 0xa6, 0x88, 0x85, 0xcd, 0xe7, 0x4a, 0x5b, 0xfc, 0x92, 0x0f, 0x6a, 0xbf, 0x59, 0xba,
     0x5c, 0x75, 0x50, 0x63, 0x73, 0xe7, 0x13, 0x0f, 0x90, 0x42, 0xda, 0x92, 0x21, 0x79, 0x25, 0x1f,
 };
-const server_key_fp: i64 = -4344800451088585951;
+const serverKeyFp: i64 = -4344800451088585951;
 
 pub const Result = struct {
     auth_key: [256]u8,
@@ -155,7 +155,7 @@ pub fn perform(transport: *Transport, io: Io, allocator: Allocator) !Result {
     io.random(rsa_payload[20 + copy_len ..]);
 
     var encrypted_data: [256]u8 = undefined;
-    try rsa.rsaEncrypt(&encrypted_data, &rsa_payload, server_key_n[0..256], allocator);
+    try rsa.rsaEncrypt(&encrypted_data, &rsa_payload, serverKeyN[0..256], allocator);
 
     // Step 5: req_DH_params
     var req2_buf: [512]u8 = undefined;
@@ -165,7 +165,7 @@ pub fn perform(transport: *Transport, io: Io, allocator: Allocator) !Result {
     try w2.writeAll(&server_nonce);
     try ser.bytes(&w2, &p_bytes);
     try ser.bytes(&w2, &q_bytes);
-    try w2.writeInt(i64, server_key_fp, .little);
+    try w2.writeInt(i64, serverKeyFp, .little);
     try ser.bytes(&w2, &encrypted_data);
     try writePlainMsg(transport, io, w2.buffered());
 

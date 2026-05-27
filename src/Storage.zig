@@ -1,3 +1,4 @@
+const Storage = @This();
 const std = @import("std");
 const Io = std.Io;
 
@@ -12,39 +13,37 @@ pub const SessionData = extern struct {
 
 /// DC IDs 1-5; stored at slot index dc_id-1.
 pub const max_dc_id: u8 = 5;
-const num_slots = max_dc_id;
+const numSlots = max_dc_id;
 
-pub const Storage = struct {
-    ptr: *anyopaque,
-    vtable: *const VTable,
+ptr: *anyopaque,
+vtable: *const VTable,
 
-    pub const VTable = struct {
-        load: *const fn (*anyopaque, Io, dc_id: u8) anyerror!?SessionData,
-        save: *const fn (*anyopaque, Io, SessionData) anyerror!void,
-    };
-
-    pub fn load(self: Storage, io: Io, dc_id: u8) !?SessionData {
-        return self.vtable.load(self.ptr, io, dc_id);
-    }
-    pub fn save(self: Storage, io: Io, data: SessionData) !void {
-        return self.vtable.save(self.ptr, io, data);
-    }
+pub const VTable = struct {
+    load: *const fn (*anyopaque, Io, dc_id: u8) anyerror!?SessionData,
+    save: *const fn (*anyopaque, Io, SessionData) anyerror!void,
 };
 
-pub const MemoryStorage = struct {
-    slots: [num_slots]?SessionData = .{null} ** num_slots,
+pub fn load(self: Storage, io: Io, dc_id: u8) !?SessionData {
+    return self.vtable.load(self.ptr, io, dc_id);
+}
+pub fn save(self: Storage, io: Io, data: SessionData) !void {
+    return self.vtable.save(self.ptr, io, data);
+}
 
-    pub fn storage(self: *MemoryStorage) Storage {
+pub const Memory = struct {
+    slots: [numSlots]?SessionData = .{null} ** numSlots,
+
+    pub fn storage(self: *Memory) Storage {
         return .{ .ptr = self, .vtable = &vtable };
     }
-    const vtable = Storage.VTable{ .load = load, .save = save };
+    const vtable = Storage.VTable{ .load = Memory.load, .save = Memory.save };
     fn load(ptr: *anyopaque, _: Io, dc_id: u8) anyerror!?SessionData {
-        const self: *MemoryStorage = @ptrCast(@alignCast(ptr));
+        const self: *Memory = @ptrCast(@alignCast(ptr));
         if (dc_id < 1 or dc_id > max_dc_id) return null;
         return self.slots[dc_id - 1];
     }
     fn save(ptr: *anyopaque, _: Io, data: SessionData) anyerror!void {
-        const self: *MemoryStorage = @ptrCast(@alignCast(ptr));
+        const self: *Memory = @ptrCast(@alignCast(ptr));
         if (data.dc_id < 1 or data.dc_id > max_dc_id) return;
         self.slots[data.dc_id - 1] = data;
     }
@@ -52,18 +51,18 @@ pub const MemoryStorage = struct {
 
 /// Session storage backed by a single file with fixed 280-byte segments,
 /// one per DC ID (segment at offset (dc_id-1) * @sizeOf(SessionData)).
-pub const FileStorage = struct {
+pub const File = struct {
     path: []const u8,
 
-    pub fn init(path: []const u8) FileStorage {
+    pub fn init(path: []const u8) File {
         return .{ .path = path };
     }
-    pub fn storage(self: *FileStorage) Storage {
+    pub fn storage(self: *File) Storage {
         return .{ .ptr = self, .vtable = &vtable };
     }
-    const vtable = Storage.VTable{ .load = load, .save = save };
+    const vtable = Storage.VTable{ .load = File.load, .save = File.save };
     fn load(ptr: *anyopaque, io: Io, dc_id: u8) anyerror!?SessionData {
-        const self: *FileStorage = @ptrCast(@alignCast(ptr));
+        const self: *File = @ptrCast(@alignCast(ptr));
         if (dc_id < 1 or dc_id > max_dc_id) return null;
         const file = Io.Dir.cwd().openFile(io, self.path, .{}) catch |err| switch (err) {
             error.FileNotFound => return null,
@@ -79,7 +78,7 @@ pub const FileStorage = struct {
         return data;
     }
     fn save(ptr: *anyopaque, io: Io, data: SessionData) anyerror!void {
-        const self: *FileStorage = @ptrCast(@alignCast(ptr));
+        const self: *File = @ptrCast(@alignCast(ptr));
         if (data.dc_id < 1 or data.dc_id > max_dc_id) return error.InvalidDcId;
         // truncate=false: create if not exists, update slot in place if exists.
         const file = try Io.Dir.cwd().createFile(io, self.path, .{ .truncate = false });
@@ -89,8 +88,8 @@ pub const FileStorage = struct {
     }
 };
 
-test "MemoryStorage load/save roundtrip" {
-    var mem = MemoryStorage{};
+test "Memory load/save roundtrip" {
+    var mem = Memory{};
     const s = mem.storage();
     try std.testing.expect(try s.load(std.Io.failing, 2) == null);
     var data: SessionData = undefined;
@@ -106,13 +105,13 @@ test "MemoryStorage load/save roundtrip" {
     try std.testing.expectEqual(data.auth_key_id, loaded.?.auth_key_id);
 }
 
-test "FileStorage load/save roundtrip" {
+test "File load/save roundtrip" {
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
     const path = "/tmp/tz_test_session.bin";
-    var fs_store = FileStorage.init(path);
-    const s = fs_store.storage();
+    var fs = File.init(path);
+    const s = fs.storage();
     var data: SessionData = undefined;
     @memset(&data.auth_key, 0xcd);
     data.auth_key_id = 99999;

@@ -21,7 +21,7 @@ const handlers = &.{
 };
 
 // boot
-var storage = tz.storage.FileStorage.init("bot.session");
+var storage = tz.Storage.File.init("bot.session");
 const client = try tz.Client(handlers).init(allocator, .{
     .api_id    = api_id,
     .api_hash  = api_hash,
@@ -52,7 +52,7 @@ try h.forwardMessages(ctx, from_peer, to_peer, &[_]i32{msg.id});
 try h.pinMessage(ctx, peer, msg.id, .{});
 try h.addReaction(ctx, peer, msg.id, "❤");
 
-var ft = h.fmt.FormattedText.init(allocator);
+var ft = h.FormattedText.init(allocator);
 defer ft.deinit();
 try ft.bold("hello"); try ft.plain(" world");
 try h.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });

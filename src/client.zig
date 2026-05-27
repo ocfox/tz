@@ -1,22 +1,20 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const connector = @import("connector.zig");
-const Connector = connector.Connector;
-const storage = @import("session/storage.zig");
-const Storage = storage.Storage;
+const Connector = @import("Connector.zig");
+const Storage = @import("Storage.zig");
 const codec = @import("codec");
 const types = @import("types");
 const functions = @import("functions");
 
 pub const HandlerEntry = struct {
     cid: u32,
-    dispatchFn: *const fn (ctx: Context, update: types.Update) anyerror!void,
+    dispatch: *const fn (ctx: Context, update: types.Update) anyerror!void,
 };
 
-var sub_conn_dummy: u8 = 0;
-const sub_conn_noop_handler = connector.UpdateHandler{
-    .ptr = &sub_conn_dummy,
+var subConnDummy: u8 = 0;
+const sub_conn_noop_handler = Connector.UpdateHandler{
+    .ptr = &subConnDummy,
     .vtable = &.{ .handle = struct {
         fn h(_: *anyopaque, _: Io, _: []const u8) void {}
     }.h },
@@ -30,7 +28,7 @@ pub fn handler(
 ) HandlerEntry {
     return .{
         .cid = UpdateType.cid,
-        .dispatchFn = struct {
+        .dispatch = struct {
             fn dispatch(ctx: Context, update: types.Update) anyerror!void {
                 switch (update) {
                     inline else => |inner| {
@@ -98,7 +96,7 @@ pub const Entities = struct {
 };
 
 pub const ClientOptions = struct {
-    dc: connector.DC = connector.default_dcs[1],
+    dc: Connector.DC = Connector.default_dcs[1],
     bot_token: ?[]const u8 = null,
     /// Called once after the first successful connection, before the update loop.
     /// Receives an opaque pointer to the Client; cast with @ptrCast(@alignCast(ptr)).
@@ -121,7 +119,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         dc_resolved: bool = false,
         bot_id: ?i64 = null,
         user_authorized: bool = false,
-        dc_list: ?[]connector.DC = null,
+        dc_list: ?[]Connector.DC = null,
         sub_conns: std.AutoHashMapUnmanaged(u8, *Connector) = .empty,
         sub_conns_mu: std.Io.Mutex = std.Io.Mutex.init,
 
@@ -150,7 +148,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     if (err == error.SessionInvalid) {
                         std.log.warn("session invalid, clearing stored session", .{});
                         const dc_id = if (self.primary) |p| p.dc_id else 0;
-                        var blank = std.mem.zeroes(storage.SessionData);
+                        var blank = std.mem.zeroes(Storage.SessionData);
                         blank.dc_id = dc_id;
                         self.opts.storage.save(io, blank) catch |e|
                             std.log.warn("failed to clear session: {}", .{e});
@@ -333,10 +331,10 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         fn runOnce(self: *Self, io: Io) !void {
             if (!self.dc_resolved) {
-                scan: for (1..storage.max_dc_id + 1) |id| {
+                scan: for (1..Storage.max_dc_id + 1) |id| {
                     const slot = try self.opts.storage.load(io, @intCast(id)) orelse continue;
                     if (slot.is_home) {
-                        if (connector.findDc(slot.dc_id, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
+                        if (Connector.findDc(slot.dc_id, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
                         break :scan;
                     }
                 }
@@ -367,7 +365,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             }
             self.primary = c;
 
-            const update_handler: connector.UpdateHandler = .{
+            const update_handler: Connector.UpdateHandler = .{
                 .ptr = self,
                 .vtable = &.{ .handle = handleUpdate },
             };
@@ -404,7 +402,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         fn fetchDcList(self: *Self, io: Io) !void {
             const config = try self.call(io, functions.help.GetConfig{});
             defer self.allocator.free(config.dc_options);
-            var list: std.ArrayList(connector.DC) = .empty;
+            var list: std.ArrayList(Connector.DC) = .empty;
             defer list.deinit(self.allocator);
             for (config.dc_options) |opt| {
                 if (opt.cdn.value != null) continue;
@@ -435,13 +433,13 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             }
         }
 
-        fn findDc(self: *const Self, dc_id: u8) ?connector.DC {
+        fn findDc(self: *const Self, dc_id: u8) ?Connector.DC {
             if (self.dc_list) |list| {
                 for (list) |dc| {
                     if (dc.id == dc_id) return dc;
                 }
             }
-            return connector.findDc(dc_id, self.opts.dc.test_server);
+            return Connector.findDc(dc_id, self.opts.dc.test_server);
         }
 
         fn callRaw(self: *Self, io: Io, bytes: []const u8) ![]u8 {
@@ -527,7 +525,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 };
                 inline for (handlers) |entry| {
                     if (update_cid == entry.cid) {
-                        entry.dispatchFn(ctx, u) catch |err|
+                        entry.dispatch(ctx, u) catch |err|
                             std.log.warn("handler error: {}", .{err});
                     }
                 }

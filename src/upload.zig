@@ -5,8 +5,8 @@ const client = @import("client.zig");
 
 const Context = client.Context;
 
-const big_threshold = 10 * 1024 * 1024; // 10 MB
-const part_size = 128 * 1024; // 128 KB
+const bigThreshold = 10 * 1024 * 1024; // 10 MB
+const partSize = 128 * 1024; // 128 KB
 
 pub const UploadOptions = struct {
     name: []const u8 = "file",
@@ -18,26 +18,25 @@ pub const UploadOptions = struct {
 /// For large files the InputFileBig variant is returned and no extra free is needed.
 pub fn upload(ctx: Context, data: []const u8, opts: UploadOptions) !types.InputFile {
     const file_id = client.nextRandomId();
-    const n_parts: i32 = @intCast((data.len + part_size - 1) / part_size);
-    const is_big = data.len > big_threshold;
+    const n_parts: i32 = @intCast((data.len + partSize - 1) / partSize);
+    const is_big = data.len > bigThreshold;
 
-    var i: i32 = 0;
-    while (i < n_parts) : (i += 1) {
-        const start = @as(usize, @intCast(i)) * part_size;
-        const end = @min(start + part_size, data.len);
+    for (0..@intCast(n_parts)) |i| {
+        const start = i * partSize;
+        const end = @min(start + partSize, data.len);
         const chunk = data[start..end];
 
         if (is_big) {
             _ = try ctx.callFile(functions.upload.SaveBigFilePart{
                 .file_id = file_id,
-                .file_part = i,
+                .file_part = @intCast(i),
                 .file_total_parts = n_parts,
                 .bytes = chunk,
             });
         } else {
             _ = try ctx.callFile(functions.upload.SaveFilePart{
                 .file_id = file_id,
-                .file_part = i,
+                .file_part = @intCast(i),
                 .bytes = chunk,
             });
         }

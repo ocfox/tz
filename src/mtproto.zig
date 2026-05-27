@@ -1,23 +1,25 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const Transport = @import("transport.zig").Transport;
-const Session = @import("session/encrypt.zig").Session;
+const Transport = @import("Transport.zig");
 const codec = @import("codec");
 const types = @import("types");
 
 // MTProto internal IDs not in schema
-const cid_msg_container: u32 = 0x73f1f8dc;
-const cid_rpc_result: u32 = 0xf35c6d01;
-const cid_gzip_packed: u32 = 0x3072cfa1;
+const cidMsgContainer: u32 = 0x73f1f8dc;
+const cidRpcResult: u32 = 0xf35c6d01;
+const cidGzipPacked: u32 = 0x3072cfa1;
 
 const PendingRequest = struct {
     buf: [1][]u8,
     queue: std.Io.Queue([]u8),
     plaintext: []const u8 = &.{},
 
-    fn init(self: *PendingRequest) void {
-        self.queue = std.Io.Queue([]u8).init(&self.buf);
+    fn init() PendingRequest {
+        var pr: PendingRequest = undefined;
+        pr.queue = std.Io.Queue([]u8).init(&pr.buf);
+        pr.plaintext = &.{};
+        return pr;
     }
 };
 
@@ -104,9 +106,7 @@ pub fn MtProto(comptime Handler: type) type {
 
         /// Send a serialized TL request, return the raw response bytes (caller frees).
         pub fn call(self: *Self, io: Io, request: []const u8) ![]u8 {
-            // SAFETY: pr.init() initializes buf and queue immediately below
-            var pr: PendingRequest = undefined;
-            pr.init();
+            var pr = PendingRequest.init();
             pr.plaintext = try gzipWrap(request, self.allocator);
             errdefer self.allocator.free(pr.plaintext);
 
@@ -146,8 +146,13 @@ pub fn MtProto(comptime Handler: type) type {
                     break;
                 };
                 defer self.allocator.free(frame);
+                if (frame.len == 4) {
+                    const code = std.mem.readInt(i32, frame[0..4], .little);
+                    std.log.warn("readLoop: server transport error: {}", .{code});
+                    continue;
+                }
                 const decrypted = self.session.decrypt(frame, self.allocator) catch |e| {
-                    std.log.debug("readLoop: decrypt failed: {}", .{e});
+                    std.log.debug("readLoop: decrypt failed: {} (frame_len={})", .{ e, frame.len });
                     continue;
                 };
                 defer self.allocator.free(decrypted.payload);
@@ -161,13 +166,13 @@ pub fn MtProto(comptime Handler: type) type {
             const cid = std.mem.readInt(u32, payload[0..4], .little);
             std.log.debug("recv cid=0x{x:0>8}", .{cid});
             switch (cid) {
-                cid_msg_container => try self.dispatchContainer(io, payload),
-                cid_rpc_result => {
+                cidMsgContainer => try self.dispatchContainer(io, payload),
+                cidRpcResult => {
                     // OOM here only skips the ack; server will retry delivery, which is safe.
                     self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
                     try self.deliverRpcResult(io, payload);
                 },
-                cid_gzip_packed => {
+                cidGzipPacked => {
                     self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
                     var r: std.Io.Reader = .fixed(payload[4..]);
                     const compressed = try codec.deserialize.bytes(&r, self.allocator);
@@ -280,9 +285,7 @@ pub fn MtProto(comptime Handler: type) type {
             {
                 self.pending_mutex.lockUncancelable(io);
                 var it = self.pending.valueIterator();
-                while (it.next()) |pr| snap.append(self.allocator, pr.*) catch {
-                    pr.*.queue.close(io);
-                };
+                while (it.next()) |pr| snap.append(self.allocator, pr.*) catch {};
                 self.pending.clearRetainingCapacity();
                 self.pending_mutex.unlock(io);
             }
@@ -314,11 +317,16 @@ pub fn MtProto(comptime Handler: type) type {
         }
 
         fn drainPending(self: *Self, io: Io) void {
+            var ptrs: [32]*PendingRequest = undefined;
+            var count: usize = 0;
             self.pending_mutex.lockUncancelable(io);
-            defer self.pending_mutex.unlock(io);
             var it = self.pending.valueIterator();
-            while (it.next()) |pr| pr.*.queue.close(io);
+            while (it.next()) |pr| : (count += 1) {
+                if (count < 32) ptrs[count] = pr.*;
+            }
             self.pending.clearRetainingCapacity();
+            self.pending_mutex.unlock(io);
+            for (ptrs[0..count]) |pr| pr.queue.close(io);
         }
 
         fn writeLoop(self: *Self, io: Io) !void {
@@ -331,7 +339,6 @@ pub fn MtProto(comptime Handler: type) type {
 
         fn pingLoop(self: *Self, io: Io) anyerror!void {
             const funcs = @import("functions");
-            self.fetchSalts(io);
             while (true) {
                 std.Io.sleep(io, std.Io.Duration.fromSeconds(60), .awake) catch break;
                 self.checkSaltRefresh(io);
@@ -379,8 +386,7 @@ pub fn MtProto(comptime Handler: type) type {
             const local_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
             self.server_time_offset = @as(i64, server_now) - @as(i64, @intCast(@divTrunc(local_ns, std.time.ns_per_s)));
             self.salts.clearRetainingCapacity();
-            var i: usize = 0;
-            while (i < count) : (i += 1) {
+            for (0..count) |i| {
                 const base = 24 + @sizeOf(types.FutureSalt) * i;
                 if (base + @sizeOf(types.FutureSalt) > raw.len) break;
                 self.salts.append(self.allocator, .{
@@ -425,15 +431,18 @@ pub fn MtProto(comptime Handler: type) type {
     };
 }
 
-const gzip_threshold = 512;
+const gzipThreshold = 512;
+
+pub const Session = @import("mtproto/Session.zig");
+pub const auth_key = @import("mtproto/auth_key.zig");
 
 fn gzipWrap(data: []const u8, allocator: Allocator) ![]u8 {
-    if (data.len <= gzip_threshold) return allocator.dupe(u8, data);
+    if (data.len <= gzipThreshold) return allocator.dupe(u8, data);
 
     const window = try allocator.alloc(u8, std.compress.flate.max_window_len);
     defer allocator.free(window);
 
-    var out: std.Io.Writer.Allocating = .init(allocator);
+    var out = try std.Io.Writer.Allocating.initCapacity(allocator, 16);
     defer out.deinit();
 
     var comp = try std.compress.flate.Compress.init(&out.writer, window, .gzip, .level_4);
@@ -444,24 +453,9 @@ fn gzipWrap(data: []const u8, allocator: Allocator) ![]u8 {
     const compressed = out.written();
     if (compressed.len >= data.len) return allocator.dupe(u8, data);
 
-    // Wrap: gzip_packed cid + TL bytes(compressed)
-    const tl_len: usize = if (compressed.len <= 253)
-        (1 + compressed.len + 3) & ~@as(usize, 3)
-    else
-        (4 + compressed.len + 3) & ~@as(usize, 3);
-    const result = try allocator.alloc(u8, 4 + tl_len);
-    std.mem.writeInt(u32, result[0..4], cid_gzip_packed, .little);
-    if (compressed.len <= 253) {
-        result[4] = @intCast(compressed.len);
-        @memcpy(result[5..][0..compressed.len], compressed);
-        @memset(result[5 + compressed.len ..][0 .. (4 - (1 + compressed.len) % 4) % 4], 0);
-    } else {
-        result[4] = 0xfe;
-        result[5] = @intCast(compressed.len & 0xff);
-        result[6] = @intCast((compressed.len >> 8) & 0xff);
-        result[7] = @intCast((compressed.len >> 16) & 0xff);
-        @memcpy(result[8..][0..compressed.len], compressed);
-        @memset(result[8 + compressed.len ..][0 .. (4 - compressed.len % 4) % 4], 0);
-    }
-    return result;
+    var w = try std.Io.Writer.Allocating.initCapacity(allocator, 4 + compressed.len + 16);
+    defer w.deinit();
+    try w.writer.writeInt(u32, cidGzipPacked, .little);
+    try codec.serialize.bytes(&w.writer, compressed);
+    return try w.toOwnedSlice();
 }

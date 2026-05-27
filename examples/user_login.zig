@@ -84,7 +84,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer threaded.deinit();
     const io = threaded.io();
 
-    var file_storage = tz.storage.FileStorage.init("user_login.session");
+    var file_storage = tz.Storage.File.init("user_login.session");
 
     const client = try Client.init(allocator, .{
         .api_id = try std.fmt.parseInt(i32, init.environ.getPosix("TZ_API_ID") orelse usage(), 10),
