@@ -47,7 +47,10 @@ pub fn decode(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerro
             },
             else => @compileError("unsupported pointer"),
         },
-        .@"struct" => try decodeStruct(T, r, allocator),
+        .@"struct" => if (comptime flags.isBareVector(T))
+            try decodeBareVector(T, r, allocator)
+        else
+            try decodeStruct(T, r, allocator),
         .@"union" => try decodeUnion(T, r, allocator),
         .void => {},
         else => @compileError("unsupported type: " ++ @typeName(T)),
@@ -84,6 +87,22 @@ pub fn decodeStructBody(comptime T: type, r: *std.Io.Reader, allocator: Allocato
         }
     }
     return result;
+}
+
+fn decodeBareVector(comptime T: type, r: *std.Io.Reader, allocator: Allocator) anyerror!T {
+    const Child = T.Child;
+    const count = try r.takeInt(u32, .little);
+    const slice = try allocator.alloc(Child, count);
+    errdefer allocator.free(slice);
+    for (slice) |*item| item.* = try decodeBareElem(Child, r, allocator);
+    return T{ .items = slice };
+}
+
+// Bare element: a constructor struct without its id; everything else decodes as-is.
+fn decodeBareElem(comptime Child: type, r: *std.Io.Reader, allocator: Allocator) anyerror!Child {
+    if (comptime @typeInfo(Child) == .@"struct" and @hasDecl(Child, "cid"))
+        return decodeStructBody(Child, r, allocator);
+    return decode(Child, r, allocator);
 }
 
 fn decodeVector(comptime Child: type, r: *std.Io.Reader, allocator: Allocator) anyerror![]Child {

@@ -31,6 +31,25 @@ pub fn Flag2(comptime bit: u5, comptime T: type) type {
     };
 }
 
+/// A bare TL vector (lowercase `vector<...>`): serialized as an i32 count followed
+/// by bare elements, with no 0x1cb5c415 vector id. When the element is a constructor
+/// type its body is written/read bare (no per-element constructor id). Used by the
+/// MTProto service layer, e.g. future_salts.salts.
+pub fn BareVector(comptime T: type) type {
+    return struct {
+        items: []const T,
+        pub const tl_bare_vector = true;
+        pub const Child = T;
+    };
+}
+
+pub fn isBareVector(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .@"struct" => @hasDecl(T, "tl_bare_vector"),
+        else => false,
+    };
+}
+
 pub fn isFlag(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .@"struct" => @hasDecl(T, "flag_bit") and @hasDecl(T, "Inner") and @hasDecl(T, "flag_word"),

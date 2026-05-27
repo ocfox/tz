@@ -56,7 +56,10 @@ fn encodeWriter(comptime T: type, value: T, w: *std.Io.Writer) anyerror!void {
             .one => try encodeWriter(ptr.child, value.*, w),
             else => @compileError("unsupported pointer kind"),
         },
-        .@"struct" => try encodeStructWriter(T, value, w),
+        .@"struct" => if (comptime flags.isBareVector(T))
+            try encodeBareVectorWriter(T, value, w)
+        else
+            try encodeStructWriter(T, value, w),
         .@"union" => try encodeUnionWriter(T, value, w),
         .void => {},
         else => @compileError("unsupported type: " ++ @typeName(T)),
@@ -85,6 +88,16 @@ fn encodeVectorWriter(slice: anytype, w: *std.Io.Writer) !void {
     try w.writeInt(u32, cidVector, .little);
     try w.writeInt(u32, @intCast(slice.len), .little);
     for (slice) |item| try encodeWriter(@TypeOf(item), item, w);
+}
+
+fn encodeBareVectorWriter(comptime T: type, value: T, w: *std.Io.Writer) !void {
+    try w.writeInt(u32, @intCast(value.items.len), .little);
+    for (value.items) |item| {
+        if (comptime @typeInfo(T.Child) == .@"struct" and @hasDecl(T.Child, "cid"))
+            try encodeStructBodyWriter(T.Child, item, w)
+        else
+            try encodeWriter(T.Child, item, w);
+    }
 }
 
 fn encodeStructWriter(comptime T: type, value: T, w: *std.Io.Writer) !void {
@@ -169,7 +182,10 @@ fn encodeInto(value: anytype, buf: *std.ArrayListUnmanaged(u8), allocator: Alloc
             .one => try encodeInto(value.*, buf, allocator),
             else => @compileError("unsupported pointer kind"),
         },
-        .@"struct" => try encodeStructInto(T, value, buf, allocator),
+        .@"struct" => if (comptime flags.isBareVector(T))
+            try encodeBareVectorInto(T, value, buf, allocator)
+        else
+            try encodeStructInto(T, value, buf, allocator),
         .@"union" => try encodeUnionInto(T, value, buf, allocator),
         .void => {},
         else => @compileError("unsupported type: " ++ @typeName(T)),
@@ -200,6 +216,16 @@ fn encodeVectorInto(slice: anytype, buf: *std.ArrayListUnmanaged(u8), allocator:
     try encodeInto(@as(u32, cidVector), buf, allocator);
     try encodeInto(@as(u32, @intCast(slice.len)), buf, allocator);
     for (slice) |item| try encodeInto(item, buf, allocator);
+}
+
+fn encodeBareVectorInto(comptime T: type, value: T, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) !void {
+    try encodeInto(@as(u32, @intCast(value.items.len)), buf, allocator);
+    for (value.items) |item| {
+        if (comptime @typeInfo(T.Child) == .@"struct" and @hasDecl(T.Child, "cid"))
+            try encodeStructBodyInto(T.Child, item, buf, allocator)
+        else
+            try encodeInto(item, buf, allocator);
+    }
 }
 
 fn encodeStructInto(comptime T: type, value: T, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) !void {

@@ -408,28 +408,18 @@ pub fn MtProto(comptime Handler: type) type {
             self.write_queue.putOne(io, enc.data) catch self.allocator.free(enc.data);
         }
 
-        // Hand-rolled rather than codec.decode: codegen emits FutureSalts.salts as
-        // []const []const u8, but the wire format is a vector of bare 16-byte
-        // future_salt structs (no per-element length prefix), so the decoder misparses.
         fn parseFutureSalts(self: *Self, raw: []const u8, io: Io) void {
-            if (raw.len < 24) return;
-            if (std.mem.readInt(u32, raw[0..4], .little) != types.FutureSalts.cid) return;
-            const server_now = std.mem.readInt(i32, raw[12..16], .little);
-            // raw[16..20] is the vector cid; skip it
-            const count = std.mem.readInt(u32, raw[20..24], .little);
+            var r: std.Io.Reader = .fixed(raw);
+            const fs = codec.decode(types.FutureSalts, &r, self.allocator) catch |e| {
+                std.log.debug("future_salts decode: {}", .{e});
+                return;
+            };
+            defer codec.free(types.FutureSalts, fs, self.allocator);
             const local_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
-            self.server_time_offset = @as(i64, server_now) - @as(i64, @intCast(@divTrunc(local_ns, std.time.ns_per_s)));
+            self.server_time_offset = @as(i64, fs.now) - @as(i64, @intCast(@divTrunc(local_ns, std.time.ns_per_s)));
             self.salts.clearRetainingCapacity();
-            for (0..count) |i| {
-                const base = 24 + @sizeOf(types.FutureSalt) * i;
-                if (base + @sizeOf(types.FutureSalt) > raw.len) break;
-                self.salts.append(self.allocator, .{
-                    .valid_since = std.mem.readInt(i32, raw[base..][0..4], .little),
-                    .valid_until = std.mem.readInt(i32, raw[base + 4 ..][0..4], .little),
-                    .salt = std.mem.readInt(i64, raw[base + 8 ..][0..8], .little),
-                }) catch break;
-            }
-            self.applySalt(server_now);
+            for (fs.salts.items) |s| self.salts.append(self.allocator, s) catch break;
+            self.applySalt(fs.now);
         }
 
         fn serverNow(self: *Self, io: Io) i64 {

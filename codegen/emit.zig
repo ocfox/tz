@@ -26,6 +26,12 @@ fn tlTypeToZig(
     if (std.mem.eql(u8, tl_type, "int128")) return "u128";
     if (std.mem.eql(u8, tl_type, "int256")) return "[32]u8";
 
+    // Lowercase `vector<...>` is a bare TL vector (no 0x1cb5c415, bare elements);
+    // uppercase `Vector<...>` is boxed and handled by the generic `<` branch below.
+    if (std.mem.startsWith(u8, tl_type, "vector<") and std.mem.endsWith(u8, tl_type, ">")) {
+        const inner = try tlTypeToZig(tl_type["vector<".len .. tl_type.len - 1], union_types, single_types, arena, qualify_unions, false);
+        return std.fmt.allocPrint(arena, "tl.BareVector({s})", .{inner});
+    }
     if (std.mem.indexOfScalar(u8, tl_type, '<')) |lt| {
         const inner = try tlTypeToZig(tl_type[lt + 1 .. tl_type.len - 1], union_types, single_types, arena, qualify_unions, false);
         return std.fmt.allocPrint(arena, "[]const {s}", .{inner});
@@ -56,6 +62,26 @@ fn tlTypeToZig(
         return std.fmt.allocPrint(arena, "{s}", .{zname});
     }
 
+    // A bare lowercase constructor reference (e.g. `future_salt` inside
+    // vector<future_salt>) names a type whose single constructor's struct we emit.
+    {
+        var it = single_types.iterator();
+        while (it.next()) |e| {
+            if (std.mem.eql(u8, e.value_ptr.*, tl_type)) {
+                var nb: [256]u8 = undefined;
+                const zname = names.typeName(tl_type, &nb);
+                if (qualify_unions)
+                    return std.fmt.allocPrint(arena, "@import(\"types\").{s}", .{zname});
+                return std.fmt.allocPrint(arena, "{s}", .{zname});
+            }
+        }
+    }
+
+    // Bang types (!X) are templated query parameters carried as pre-serialized
+    // bytes — []const u8 is the intended mapping.
+    if (std.mem.startsWith(u8, tl_type, "!")) return "[]const u8";
+
+    // Unresolved reference: default to raw bytes.
     return "[]const u8";
 }
 

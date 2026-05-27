@@ -18,6 +18,7 @@ pub const free = @import("free.zig").free;
 
 pub const Flags = flags.Flags;
 pub const Flags2 = flags.Flags2;
+pub const BareVector = flags.BareVector;
 pub const Flag = flags.Flag;
 pub const Flag2 = flags.Flag2;
 pub const isFlag = flags.isFlag;
@@ -114,4 +115,40 @@ test "encode/decode union" {
         const got = try decode(U, &r, a);
         try std.testing.expectEqual(@as(i64, -999), got.B.y);
     }
+}
+
+test "bare vector of bare structs roundtrips and matches future_salts layout" {
+    const a = std.testing.allocator;
+    const Salt = struct {
+        pub const cid: u32 = 0x0949d9dc;
+        valid_since: i32,
+        valid_until: i32,
+        salt: i64,
+    };
+    const Salts = struct {
+        pub const cid: u32 = 0xae500895;
+        req_msg_id: i64,
+        now: i32,
+        salts: BareVector(Salt),
+    };
+    const val = Salts{
+        .req_msg_id = 123,
+        .now = 1000,
+        .salts = .{ .items = &.{
+            .{ .valid_since = 1, .valid_until = 2, .salt = 111 },
+            .{ .valid_since = 3, .valid_until = 4, .salt = 222 },
+        } },
+    };
+    const bytes = try encodeAlloc(val, a);
+    defer a.free(bytes);
+
+    // Wire: cid(4) req_msg_id(8) now(4) count(4) + 2*16 — no 0x1cb5c415, no per-elem cid.
+    try std.testing.expectEqual(@as(usize, 4 + 8 + 4 + 4 + 2 * 16), bytes.len);
+    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, bytes[16..20], .little));
+
+    var r = std.Io.Reader.fixed(bytes);
+    const got = try decode(Salts, &r, a);
+    defer free(Salts, got, a);
+    try std.testing.expectEqual(@as(usize, 2), got.salts.items.len);
+    try std.testing.expectEqual(@as(i64, 222), got.salts.items[1].salt);
 }
