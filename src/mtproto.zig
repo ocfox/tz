@@ -189,22 +189,12 @@ pub fn MtProto(comptime Handler: type) type {
             switch (cid) {
                 cidMsgContainer => try self.dispatchContainer(io, payload),
                 cidRpcResult => {
-                    // msg_id == 0 when dispatched from inside a gzip container (already acked).
-                    if (msg_id != 0) self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
+                    self.queueAck(msg_id);
                     try self.deliverRpcResult(io, payload);
                 },
                 cidGzipPacked => {
-                    self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
-                    var r: std.Io.Reader = .fixed(payload[4..]);
-                    const compressed = try codec.deserialize.bytes(&r, self.allocator);
-                    defer self.allocator.free(compressed);
-                    var in = std.Io.Reader.fixed(compressed);
-                    var aw: std.Io.Writer.Allocating = .init(self.allocator);
-                    defer aw.deinit();
-                    var decomp: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
-                    _ = try decomp.reader.streamRemaining(&aw.writer);
-                    // msg_id already queued above; pass 0 so inner doesn't double-ack
-                    try self.dispatch(io, aw.written(), 0);
+                    self.queueAck(msg_id);
+                    try self.handleGzip(io, payload);
                 },
                 types.MsgsAck.cid => {},
                 types.FutureSalts.cid => self.parseFutureSalts(payload, io),
@@ -248,10 +238,31 @@ pub fn MtProto(comptime Handler: type) type {
                     self.pong_event.set(io);
                 },
                 else => {
-                    if (msg_id != 0) self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
+                    self.queueAck(msg_id);
                     self.handler.onUpdate(io, payload);
                 },
             }
+        }
+
+        /// Enqueue msg_id to be acked on the next flushAcks. msg_id == 0 marks a
+        /// message dispatched from inside a gzip container, whose outer id is
+        /// already queued. OOM only skips the ack; the server will retry delivery.
+        fn queueAck(self: *Self, msg_id: i64) void {
+            if (msg_id == 0) return;
+            self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
+        }
+
+        fn handleGzip(self: *Self, io: Io, payload: []const u8) !void {
+            var r: std.Io.Reader = .fixed(payload[4..]);
+            const compressed = try codec.deserialize.bytes(&r, self.allocator);
+            defer self.allocator.free(compressed);
+            var in = std.Io.Reader.fixed(compressed);
+            var aw: std.Io.Writer.Allocating = .init(self.allocator);
+            defer aw.deinit();
+            var decomp: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
+            _ = try decomp.reader.streamRemaining(&aw.writer);
+            // Outer msg already acked by caller; pass 0 so inner doesn't double-ack.
+            try self.dispatch(io, aw.written(), 0);
         }
 
         fn dispatchContainer(self: *Self, io: Io, payload: []const u8) !void {
