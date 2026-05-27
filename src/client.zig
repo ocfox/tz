@@ -309,7 +309,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const exported = try self.call(io2, functions.auth.ExportAuthorization{
                 .dc_id = @intCast(dc_id),
             });
-            defer self.allocator.free(exported.bytes);
+            defer codec.free(@TypeOf(exported), exported, self.allocator);
             var buf: [512]u8 = undefined;
             var w: std.Io.Writer = .fixed(&buf);
             try codec.encode(functions.auth.ImportAuthorization{
@@ -401,7 +401,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         fn fetchDcList(self: *Self, io: Io) !void {
             const config = try self.call(io, functions.help.GetConfig{});
-            defer self.allocator.free(config.dc_options);
+            defer codec.free(@TypeOf(config), config, self.allocator);
             var list: std.ArrayList(Connector.DC) = .empty;
             defer list.deinit(self.allocator);
             for (config.dc_options) |opt| {
@@ -424,6 +424,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .api_hash = self.opts.api_hash,
                 .bot_auth_token = token,
             });
+            defer codec.free(@TypeOf(auth), auth, self.allocator);
             switch (auth) {
                 .AuthAuthorization => |a| switch (a.user) {
                     .User => |u| self.bot_id = u.id,

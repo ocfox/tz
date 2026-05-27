@@ -14,6 +14,7 @@ pub const nextRandomId = enc.nextRandomId;
 
 pub const decode = dec.decode;
 pub const decodeStructBody = dec.decodeStructBody;
+pub const free = @import("free.zig").free;
 
 pub const Flags = flags.Flags;
 pub const Flags2 = flags.Flags2;
