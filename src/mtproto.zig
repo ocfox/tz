@@ -42,6 +42,10 @@ pub fn MtProto(comptime Handler: type) type {
         write_queue_buf: [32][]const u8,
         pending: std.AutoHashMap(i64, *PendingRequest),
         pending_mutex: std.Io.Mutex = .init,
+        // Serializes session.encrypt across readLoop (flushAcks/retryPending),
+        // pingLoop (ping/fetchSalts), and caller threads (call). encrypt mutates
+        // seq_no/last_msg_id and the shared encrypt_scratch buffer.
+        encrypt_mutex: std.Io.Mutex = .init,
         pending_acks: std.ArrayListUnmanaged(i64) = .empty,
         salts: std.ArrayListUnmanaged(types.FutureSalt) = .empty,
         salt_valid_until: i64 = 0,
@@ -71,6 +75,11 @@ pub fn MtProto(comptime Handler: type) type {
                 .handler = handler,
             };
             self.write_queue = std.Io.Queue([]const u8).init(&self.write_queue_buf);
+            // The DH handshake ran readFrame on the stack-allocated transport, so any
+            // lazily-created reader points at a now-stale buffer. Reset it to re-init at
+            // this struct's stable heap address. Safe: server is idle until our first
+            // encrypted message, so no buffered bytes are lost.
+            self.transport.reader = null;
             return self;
         }
 
@@ -104,13 +113,21 @@ pub fn MtProto(comptime Handler: type) type {
             self.select = null;
         }
 
+        /// Encrypt under encrypt_mutex. Required for every outbound message since
+        /// readLoop, pingLoop, and caller threads all encrypt concurrently.
+        fn encryptLocked(self: *Self, plaintext: []const u8, io: Io, content_related: bool) !Session.EncryptResult {
+            self.encrypt_mutex.lockUncancelable(io);
+            defer self.encrypt_mutex.unlock(io);
+            return self.session.encrypt(plaintext, self.allocator, io, content_related);
+        }
+
         /// Send a serialized TL request, return the raw response bytes (caller frees).
         pub fn call(self: *Self, io: Io, request: []const u8) ![]u8 {
             var pr = PendingRequest.init();
             pr.plaintext = try gzipWrap(request, self.allocator);
             errdefer self.allocator.free(pr.plaintext);
 
-            const enc = try self.session.encrypt(pr.plaintext, self.allocator, io);
+            const enc = try self.encryptLocked(pr.plaintext, io, true);
             var enc_sent = false;
             defer if (!enc_sent) self.allocator.free(enc.data);
 
@@ -148,6 +165,10 @@ pub fn MtProto(comptime Handler: type) type {
                 defer self.allocator.free(frame);
                 if (frame.len == 4) {
                     const code = std.mem.readInt(i32, frame[0..4], .little);
+                    if (code == -404) {
+                        std.log.warn("readLoop: auth key not found (-404), terminating connection", .{});
+                        break;
+                    }
                     std.log.warn("readLoop: server transport error: {}", .{code});
                     continue;
                 }
@@ -168,8 +189,8 @@ pub fn MtProto(comptime Handler: type) type {
             switch (cid) {
                 cidMsgContainer => try self.dispatchContainer(io, payload),
                 cidRpcResult => {
-                    // OOM here only skips the ack; server will retry delivery, which is safe.
-                    self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
+                    // msg_id == 0 when dispatched from inside a gzip container (already acked).
+                    if (msg_id != 0) self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
                     try self.deliverRpcResult(io, payload);
                 },
                 cidGzipPacked => {
@@ -227,7 +248,7 @@ pub fn MtProto(comptime Handler: type) type {
                     self.pong_event.set(io);
                 },
                 else => {
-                    self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
+                    if (msg_id != 0) self.pending_acks.append(self.allocator, msg_id) catch |err| std.log.debug("ack enqueue: {}", .{err});
                     self.handler.onUpdate(io, payload);
                 },
             }
@@ -260,7 +281,7 @@ pub fn MtProto(comptime Handler: type) type {
             w.writeInt(u32, @intCast(ids.len), .little) catch return;
             for (ids) |id| w.writeInt(i64, id, .little) catch return;
             self.pending_acks.clearRetainingCapacity();
-            const enc = self.session.encrypt(w.buffered(), self.allocator, io) catch return;
+            const enc = self.encryptLocked(w.buffered(), io, false) catch return;
             self.write_queue.putOne(io, enc.data) catch self.allocator.free(enc.data);
         }
 
@@ -292,7 +313,7 @@ pub fn MtProto(comptime Handler: type) type {
             defer snap.deinit(self.allocator);
 
             for (snap.items) |pr| {
-                const enc = self.session.encrypt(pr.plaintext, self.allocator, io) catch {
+                const enc = self.encryptLocked(pr.plaintext, io, true) catch {
                     pr.queue.close(io);
                     continue;
                 };
@@ -352,7 +373,7 @@ pub fn MtProto(comptime Handler: type) type {
                 codec.encode(funcs.PingDelayDisconnect{ .ping_id = ping_id, .disconnect_delay = 75 }, &pw) catch break;
                 const bytes = pw.buffered();
                 self.pong_event.reset();
-                const enc = self.session.encrypt(bytes, self.allocator, io) catch break;
+                const enc = self.encryptLocked(bytes, io, false) catch break;
                 self.write_queue.putOne(io, enc.data) catch {
                     self.allocator.free(enc.data);
                     break;
@@ -372,9 +393,10 @@ pub fn MtProto(comptime Handler: type) type {
             var req_buf: [8]u8 = undefined;
             var w: std.Io.Writer = .fixed(&req_buf);
             codec.encode(funcs.GetFutureSalts{ .num = 64 }, &w) catch return;
-            const raw = self.call(io, w.buffered()) catch return;
-            defer self.allocator.free(raw);
-            self.parseFutureSalts(raw, io);
+            // Service message: fire-and-forget. Server responds with FutureSalts
+            // as a standalone message (not rpc_result), handled by parseFutureSalts in dispatch.
+            const enc = self.encryptLocked(w.buffered(), io, false) catch return;
+            self.write_queue.putOne(io, enc.data) catch self.allocator.free(enc.data);
         }
 
         fn parseFutureSalts(self: *Self, raw: []const u8, io: Io) void {

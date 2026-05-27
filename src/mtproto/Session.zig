@@ -85,7 +85,7 @@ fn kdf(auth_key: *const [256]u8, msg_key: *const [16]u8, x: usize, key: *[32]u8,
 
 pub const EncryptResult = struct { data: []u8, msg_id: i64 };
 
-pub fn encrypt(self: *Session, plaintext: []const u8, allocator: Allocator, io: Io) !EncryptResult {
+pub fn encrypt(self: *Session, plaintext: []const u8, allocator: Allocator, io: Io, content_related: bool) !EncryptResult {
     const pad_len = blk: {
         const unpadded = plaintext.len + 32;
         const rem = (unpadded + 12) % 16;
@@ -99,7 +99,7 @@ pub fn encrypt(self: *Session, plaintext: []const u8, allocator: Allocator, io: 
     std.mem.writeInt(i64, inner[0..8], self.server_salt, .little);
     std.mem.writeInt(i64, inner[8..16], self.session_id, .little);
     std.mem.writeInt(i64, inner[16..24], msg_id, .little);
-    std.mem.writeInt(u32, inner[24..28], self.nextSeqNo(true), .little);
+    std.mem.writeInt(u32, inner[24..28], self.nextSeqNo(content_related), .little);
     std.mem.writeInt(u32, inner[28..32], @intCast(plaintext.len), .little);
     @memcpy(inner[32..][0..plaintext.len], plaintext);
     io.random(inner[32 + plaintext.len ..]);
@@ -126,7 +126,9 @@ pub fn decrypt(self: *Session, ciphertext: []const u8, allocator: Allocator) !De
     if (ciphertext.len < 24) return error.TooShort;
     const frame_key_id = std.mem.readInt(i64, ciphertext[0..8], .little);
     if (frame_key_id != self.auth_key_id) {
-        std.log.debug("decrypt: mismatched auth_key_id (ignoring)", .{});
+        // Wrong key: decrypting would yield garbage and (in abridged transport)
+        // desync framing. Reject the frame instead.
+        return error.AuthKeyMismatch;
     }
     const msg_key: *const [16]u8 = ciphertext[8..24];
     const encrypted = ciphertext[24..];
@@ -159,7 +161,7 @@ test "message encrypt/decrypt roundtrip" {
     const plaintext = "Hello, MTProto 2.0!";
 
     // Verify client→server output has correct structure (auth_key_id + msg_key + ciphertext).
-    const encrypted = try session.encrypt(plaintext, allocator, io);
+    const encrypted = try session.encrypt(plaintext, allocator, io, true);
     defer allocator.free(encrypted.data);
     try std.testing.expect(encrypted.data.len >= 24);
     try std.testing.expectEqual(session.auth_key_id, std.mem.readInt(i64, encrypted.data[0..8], .little));

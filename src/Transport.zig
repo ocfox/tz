@@ -8,6 +8,12 @@ pub const Mode = enum { abridged, intermediate, padded };
 stream: Io.net.Stream,
 mode: Mode,
 init_sent: bool = false,
+// Persistent read buffer + reader. The buffered reader may pull several frames
+// from the socket in one syscall; recreating it per-frame (with a stack buffer)
+// would discard the over-read bytes and desync framing. Lazily initialized on
+// first readFrame so its buffer pointer refers to this struct's final address.
+read_buf: [16 * 1024]u8 = undefined,
+reader: ?Io.net.Stream.Reader = null,
 
 pub fn init(stream: Io.net.Stream, mode: Mode) Transport {
     return .{ .stream = stream, .mode = mode };
@@ -56,9 +62,8 @@ pub fn writeFrame(self: *Transport, io: Io, data: []const u8) !void {
 }
 
 pub fn readFrame(self: *Transport, io: Io, allocator: Allocator) ![]u8 {
-    var buf: [256]u8 = undefined;
-    var sr = self.stream.reader(io, &buf);
-    const r = &sr.interface;
+    if (self.reader == null) self.reader = self.stream.reader(io, &self.read_buf);
+    const r = &self.reader.?.interface;
     const frame_len: usize = switch (self.mode) {
         .abridged => blk: {
             const first = try r.takeByte();
