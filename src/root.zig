@@ -17,6 +17,9 @@ pub const default_dcs = Connector.default_dcs;
 
 pub const helpers = @import("helpers.zig");
 
+pub const MessageBox = @import("updates/MessageBox.zig");
+pub const PeerCache = @import("updates/PeerCache.zig");
+
 pub const crypto = @import("crypto.zig");
 
 test {
@@ -26,4 +29,6 @@ test {
     _ = @import("crypto/dh.zig");
     _ = @import("crypto/aes_ige.zig");
     _ = @import("mtproto/Session.zig");
+    _ = @import("updates/MessageBox.zig");
+    _ = @import("updates/PeerCache.zig");
 }

@@ -48,6 +48,8 @@ pub const Context = struct {
     io: Io,
     allocator: Allocator,
     entities: Entities,
+    peer_cache: *const @import("updates/PeerCache.zig"),
+    mb_mutex: *std.Io.Mutex,
     callFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
     /// Like callFn but routes FILE_MIGRATE to a sub-connection automatically.
     callFileFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
@@ -79,6 +81,18 @@ pub const Context = struct {
         defer self.allocator.free(raw);
         var r: std.Io.Reader = .fixed(raw);
         return codec.decode(@TypeOf(request).Response, &r, self.allocator);
+    }
+
+    /// Resolve a known peer's InputPeer (observed during this session).
+    pub fn resolvePeer(self: Context, id: i64) ?types.InputPeer {
+        self.mb_mutex.lockUncancelable(self.io);
+        defer self.mb_mutex.unlock(self.io);
+        return self.peer_cache.inputPeer(id);
+    }
+    pub fn resolveInputChannel(self: Context, id: i64) ?types.InputChannel {
+        self.mb_mutex.lockUncancelable(self.io);
+        defer self.mb_mutex.unlock(self.io);
+        return self.peer_cache.inputChannel(id);
     }
 };
 
@@ -122,6 +136,12 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         dc_list: ?[]Connector.DC = null,
         sub_conns: std.AutoHashMapUnmanaged(u8, *Connector) = .empty,
         sub_conns_mu: std.Io.Mutex = std.Io.Mutex.init,
+        message_box: @import("updates/MessageBox.zig") = .{},
+        peer_cache: @import("updates/PeerCache.zig") = .{},
+        mb_mutex: std.Io.Mutex = .init,
+        state_initialized: bool = false,
+        sync_event: std.Io.Event = .unset,
+        sync_stop: bool = false,
 
         pub fn init(allocator: Allocator, opts: ClientOptions) !*Self {
             const c = try allocator.create(Self);
@@ -134,6 +154,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             // Sub-conns should have been closed in runOnce's defer; clean up any stragglers.
             var it = self.sub_conns.valueIterator();
             while (it.next()) |conn| conn.*.deinit();
+            self.message_box.deinit(self.allocator);
+            self.peer_cache.deinit(self.allocator);
             self.sub_conns.deinit(self.allocator);
             self.allocator.destroy(self);
         }
@@ -391,10 +413,20 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     self.markHomeDc(io);
                 }
             }
-            self.exec(io, functions.updates.GetState{}) catch |err|
-                std.log.warn("failed to sync update state: {}", .{err});
+            self.initUpdateState(io) catch |err|
+                std.log.warn("failed to init update state: {}", .{err});
             self.fetchDcList(io) catch |err|
                 std.log.warn("failed to fetch DC list: {}", .{err});
+
+            self.sync_stop = false;
+            self.sync_event.reset();
+            var sync_future = std.Io.async(io, syncLoop, .{ self, io });
+            defer {
+                self.sync_stop = true;
+                self.sync_event.set(io);
+                _ = sync_future.await(io);
+            }
+
             std.log.info("waiting for updates", .{});
             c.join(io);
         }
@@ -415,6 +447,125 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             if (self.dc_list) |old| self.allocator.free(old);
             self.dc_list = try list.toOwnedSlice(self.allocator);
             std.log.info("DC list updated: {} entries", .{self.dc_list.?.len});
+        }
+
+        fn initUpdateState(self: *Self, io: Io) !void {
+            if (self.state_initialized) return;
+            if (try self.opts.storage.loadUpdateState(io, self.allocator)) |blob| {
+                defer self.allocator.free(blob);
+                var r: std.Io.Reader = .fixed(blob);
+                self.mb_mutex.lockUncancelable(io);
+                defer self.mb_mutex.unlock(io);
+                self.message_box.deserialize(self.allocator, &r) catch |e| {
+                    std.log.warn("update state deserialize failed ({}), resetting", .{e});
+                    self.message_box.deinit(self.allocator);
+                    self.message_box = .{};
+                };
+            }
+            const need_state = blk: {
+                self.mb_mutex.lockUncancelable(io);
+                defer self.mb_mutex.unlock(io);
+                break :blk self.message_box.pts == 0;
+            };
+            if (need_state) {
+                const st = try self.call(io, functions.updates.GetState{});
+                defer codec.free(@TypeOf(st), st, self.allocator);
+                self.mb_mutex.lockUncancelable(io);
+                self.message_box.setState(st);
+                self.mb_mutex.unlock(io);
+            }
+            self.state_initialized = true;
+        }
+
+        fn syncLoop(self: *Self, io: Io) void {
+            while (true) {
+                self.sync_event.waitTimeout(io, .{ .duration = .{
+                    .raw = std.Io.Duration.fromSeconds(60),
+                    .clock = .awake,
+                } }) catch {};
+                self.sync_event.reset();
+                if (self.closed or self.sync_stop) return;
+                self.drainDifferences(io) catch |err|
+                    std.log.debug("drainDifferences: {}", .{err});
+            }
+        }
+
+        fn drainDifferences(self: *Self, io: Io) !void {
+            var changed = false;
+            var guard: usize = 0;
+            while (guard < 100) : (guard += 1) {
+                if (self.sync_stop) break;
+                const req = blk: {
+                    self.mb_mutex.lockUncancelable(io);
+                    defer self.mb_mutex.unlock(io);
+                    break :blk self.message_box.takeDifferenceRequest();
+                } orelse break;
+                changed = true;
+                switch (req) {
+                    .common => |gd| try self.fetchCommonDiff(io, gd),
+                    .channel => |ch| try self.fetchChannelDiff(io, ch.id, ch.req),
+                }
+            }
+            if (changed) self.persistState(io);
+        }
+
+        fn fetchCommonDiff(self: *Self, io: Io, gd: functions.updates.GetDifference) !void {
+            const diff = try self.call(io, gd);
+            defer codec.free(@TypeOf(diff), diff, self.allocator);
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const applied = blk: {
+                self.mb_mutex.lockUncancelable(io);
+                defer self.mb_mutex.unlock(io);
+                const a = try self.message_box.applyDifference(arena.allocator(), diff);
+                self.peer_cache.update(self.allocator, a.users, a.chats) catch {};
+                self.recordChannelHashesLocked(a.chats);
+                break :blk a;
+            };
+            try self.dispatchUpdateSlice(io, arena.allocator(), applied.updates, applied.users, applied.chats);
+        }
+
+        fn fetchChannelDiff(self: *Self, io: Io, id: i64, base: functions.updates.GetChannelDifference) !void {
+            var req = base;
+            {
+                self.mb_mutex.lockUncancelable(io);
+                defer self.mb_mutex.unlock(io);
+                if (self.peer_cache.inputChannel(id)) |ic| {
+                    req.channel = ic;
+                } else {
+                    _ = self.message_box.getting_channel_diff.remove(id);
+                    std.log.debug("channel {} access_hash unknown, skipping diff", .{id});
+                    return;
+                }
+            }
+            const diff = try self.call(io, req);
+            defer codec.free(@TypeOf(diff), diff, self.allocator);
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const applied = blk: {
+                self.mb_mutex.lockUncancelable(io);
+                defer self.mb_mutex.unlock(io);
+                const a = try self.message_box.applyChannelDifference(self.allocator, arena.allocator(), id, diff);
+                self.peer_cache.update(self.allocator, a.users, a.chats) catch {};
+                self.recordChannelHashesLocked(a.chats);
+                break :blk a;
+            };
+            try self.dispatchUpdateSlice(io, arena.allocator(), applied.updates, applied.users, applied.chats);
+        }
+
+        fn persistState(self: *Self, io: Io) void {
+            var aw: std.Io.Writer.Allocating = .init(self.allocator);
+            defer aw.deinit();
+            {
+                self.mb_mutex.lockUncancelable(io);
+                defer self.mb_mutex.unlock(io);
+                self.message_box.serialize(&aw.writer) catch |e| {
+                    std.log.debug("serialize state: {}", .{e});
+                    return;
+                };
+            }
+            self.opts.storage.saveUpdateState(io, aw.written()) catch |e|
+                std.log.debug("saveUpdateState: {}", .{e});
         }
 
         fn authBot(self: *Self, io: Io, token: []const u8) !void {
@@ -485,8 +636,12 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     std.log.warn("update dispatch error: {}", .{err}),
                 types.UpdateShortChatMessage.cid => self.dispatchShortChatMessage(io, payload) catch |err|
                     std.log.warn("update dispatch error: {}", .{err}),
-                types.UpdatesTooLong.cid => self.exec(io, functions.updates.GetState{}) catch |err|
-                    std.log.warn("UpdatesTooLong resync error: {}", .{err}),
+                types.UpdatesTooLong.cid => {
+                    self.mb_mutex.lockUncancelable(io);
+                    self.message_box.getting_diff = true;
+                    self.mb_mutex.unlock(io);
+                    self.sync_event.set(io);
+                },
                 else => {},
             }
         }
@@ -516,6 +671,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .io = io,
                 .allocator = self.allocator,
                 .entities = entities,
+                .peer_cache = &self.peer_cache,
+                .mb_mutex = &self.mb_mutex,
                 .callFn = callImpl,
                 .callFileFn = callFileImpl,
             };
@@ -533,8 +690,51 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             }
         }
 
+        /// Runs updates through the MessageBox, applies peer info, then dispatches
+        /// the confirmed-order updates. On gap, signals sync_event (never blocks).
+        fn routeUpdates(
+            self: *Self,
+            io: Io,
+            arena_alloc: Allocator,
+            updates: []const types.Update,
+            users: []const types.User,
+            chats: []const types.Chat,
+        ) !void {
+            var applied: []types.Update = &.{};
+            var gap = false;
+            {
+                self.mb_mutex.lockUncancelable(io);
+                defer self.mb_mutex.unlock(io);
+                self.peer_cache.update(self.allocator, users, chats) catch |e|
+                    std.log.debug("peer_cache: {}", .{e});
+                self.recordChannelHashesLocked(chats);
+                const res = self.message_box.processUpdates(self.allocator, arena_alloc, updates) catch |e| {
+                    std.log.debug("processUpdates: {}", .{e});
+                    return;
+                };
+                applied = res.applied;
+                gap = self.message_box.getting_diff or self.message_box.getting_channel_diff.count() > 0;
+            }
+            try self.dispatchUpdateSlice(io, arena_alloc, applied, users, chats);
+            if (gap) self.sync_event.set(io);
+        }
+
+        /// Caller must hold mb_mutex.
+        fn recordChannelHashesLocked(self: *Self, chats: []const types.Chat) void {
+            for (chats) |c| switch (c) {
+                .Channel => |ch| if (ch.access_hash.value) |ah| {
+                    const gop = self.message_box.channels.getOrPut(self.allocator, ch.id) catch return;
+                    if (gop.found_existing) {
+                        gop.value_ptr.access_hash = ah;
+                    } else {
+                        gop.value_ptr.* = .{ .pts = 0, .access_hash = ah };
+                    }
+                },
+                else => {},
+            };
+        }
+
         fn dispatchUpdates(self: *Self, io: Io, payload: []const u8) !void {
-            if (handlers.len == 0) return;
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
             const arena_alloc = arena.allocator();
@@ -542,26 +742,24 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const cid = std.mem.readInt(u32, payload[0..4], .little);
             if (cid == types.UpdatesCombined.cid) {
                 const upd = try codec.decodeStructBody(types.UpdatesCombined, &r, arena_alloc);
-                try self.dispatchUpdateSlice(io, arena_alloc, upd.updates, upd.users, upd.chats);
+                try self.routeUpdates(io, arena_alloc, upd.updates, upd.users, upd.chats);
             } else {
                 const upd = try codec.decodeStructBody(types.Updates_, &r, arena_alloc);
-                try self.dispatchUpdateSlice(io, arena_alloc, upd.updates, upd.users, upd.chats);
+                try self.routeUpdates(io, arena_alloc, upd.updates, upd.users, upd.chats);
             }
         }
 
         fn dispatchShort(self: *Self, io: Io, payload: []const u8) !void {
-            if (handlers.len == 0) return;
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
             const arena_alloc = arena.allocator();
             var r: std.Io.Reader = .fixed(payload[4..]);
             const upd = try codec.decodeStructBody(types.UpdateShort, &r, arena_alloc);
             const updates = [_]types.Update{upd.update};
-            try self.dispatchUpdateSlice(io, arena_alloc, &updates, &.{}, &.{});
+            try self.routeUpdates(io, arena_alloc, &updates, &.{}, &.{});
         }
 
         fn dispatchShortMessage(self: *Self, io: Io, payload: []const u8) !void {
-            if (handlers.len == 0) return;
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
             const arena_alloc = arena.allocator();
@@ -588,11 +786,10 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .pts = short.pts,
                 .pts_count = short.pts_count,
             } }};
-            try self.dispatchUpdateSlice(io, arena_alloc, &updates, &.{}, &.{});
+            try self.routeUpdates(io, arena_alloc, &updates, &.{}, &.{});
         }
 
         fn dispatchShortChatMessage(self: *Self, io: Io, payload: []const u8) !void {
-            if (handlers.len == 0) return;
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
             const arena_alloc = arena.allocator();
@@ -619,7 +816,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .pts = short.pts,
                 .pts_count = short.pts_count,
             } }};
-            try self.dispatchUpdateSlice(io, arena_alloc, &updates, &.{}, &.{});
+            try self.routeUpdates(io, arena_alloc, &updates, &.{}, &.{});
         }
     };
 }
