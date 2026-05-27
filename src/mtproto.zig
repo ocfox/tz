@@ -199,39 +199,37 @@ pub fn MtProto(comptime Handler: type) type {
                 types.MsgsAck.cid => {},
                 types.FutureSalts.cid => self.parseFutureSalts(payload, io),
                 types.NewSessionCreated.cid => {
-                    if (payload.len >= 28) {
-                        self.session.server_salt = std.mem.readInt(i64, payload[20..28], .little);
-                    }
+                    var r: std.Io.Reader = .fixed(payload);
+                    const m = codec.decode(types.NewSessionCreated, &r, self.allocator) catch return;
+                    self.session.server_salt = m.server_salt;
                 },
                 types.BadServerSalt.cid => {
-                    if (payload.len >= 28) {
-                        const new_salt = std.mem.readInt(i64, payload[20..28], .little);
-                        self.session.server_salt = new_salt;
-                        std.log.debug("bad_server_salt, updated salt, retrying {} pending", .{self.pending.count()});
-                        self.pong_event.set(io);
-                        self.retryPending(io);
-                    } else {
-                        std.log.warn("bad_server_salt: payload too short, draining", .{});
-                        self.drainPending(io);
-                    }
+                    var r: std.Io.Reader = .fixed(payload);
+                    const m = codec.decode(types.BadServerSalt, &r, self.allocator) catch {
+                        std.log.warn("bad_server_salt: decode failed, draining", .{});
+                        return self.drainPending(io);
+                    };
+                    self.session.server_salt = m.new_server_salt;
+                    std.log.debug("bad_server_salt, updated salt, retrying {} pending", .{self.pending.count()});
+                    self.pong_event.set(io);
+                    self.retryPending(io);
                 },
                 types.BadMsgNotification_.cid => {
-                    if (payload.len >= 20) {
-                        const error_code = std.mem.readInt(i32, payload[16..20], .little);
-                        std.log.warn("bad_msg_notification error_code={}", .{error_code});
-                        switch (error_code) {
-                            // Msg ID too low/high: correct clock offset from server msg_id.
-                            16, 17 => {
-                                self.session.correctTimeOffset(msg_id, io);
-                                self.retryPending(io);
-                            },
-                            // Other seqno/msg_id issues: retry with corrected values.
-                            18, 19, 20, 32, 33, 48 => self.retryPending(io),
-                            else => self.drainPending(io),
-                        }
-                    } else {
-                        std.log.warn("bad_msg_notification (short payload)", .{});
-                        self.drainPending(io);
+                    var r: std.Io.Reader = .fixed(payload);
+                    const m = codec.decode(types.BadMsgNotification_, &r, self.allocator) catch {
+                        std.log.warn("bad_msg_notification: decode failed, draining", .{});
+                        return self.drainPending(io);
+                    };
+                    std.log.warn("bad_msg_notification error_code={}", .{m.error_code});
+                    switch (m.error_code) {
+                        // Msg ID too low/high: correct clock offset from server msg_id.
+                        16, 17 => {
+                            self.session.correctTimeOffset(msg_id, io);
+                            self.retryPending(io);
+                        },
+                        // Other seqno/msg_id issues: retry with corrected values.
+                        18, 19, 20, 32, 33, 48 => self.retryPending(io),
+                        else => self.drainPending(io),
                     }
                 },
                 types.Pong.cid => {
@@ -410,6 +408,9 @@ pub fn MtProto(comptime Handler: type) type {
             self.write_queue.putOne(io, enc.data) catch self.allocator.free(enc.data);
         }
 
+        // Hand-rolled rather than codec.decode: codegen emits FutureSalts.salts as
+        // []const []const u8, but the wire format is a vector of bare 16-byte
+        // future_salt structs (no per-element length prefix), so the decoder misparses.
         fn parseFutureSalts(self: *Self, raw: []const u8, io: Io) void {
             if (raw.len < 24) return;
             if (std.mem.readInt(u32, raw[0..4], .little) != types.FutureSalts.cid) return;
