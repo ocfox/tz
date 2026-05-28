@@ -308,6 +308,7 @@ pub fn MtProto(comptime Handler: type) type {
                 break :blk e.value;
             };
             const result = try self.allocator.dupe(u8, payload[12..]);
+            errdefer self.allocator.free(result);
             try pr.queue.putOne(io, result);
         }
 
@@ -349,16 +350,15 @@ pub fn MtProto(comptime Handler: type) type {
         }
 
         fn drainPending(self: *Self, io: Io) void {
-            var ptrs: [32]*PendingRequest = undefined;
-            var count: usize = 0;
+            var snap: std.ArrayListUnmanaged(*PendingRequest) = .empty;
+            defer snap.deinit(self.allocator);
             self.pending_mutex.lockUncancelable(io);
             var it = self.pending.valueIterator();
-            while (it.next()) |pr| : (count += 1) {
-                if (count < 32) ptrs[count] = pr.*;
-            }
+            while (it.next()) |pr| snap.append(self.allocator, pr.*) catch |err|
+                std.log.debug("drainPending: drop pending request: {}", .{err});
             self.pending.clearRetainingCapacity();
             self.pending_mutex.unlock(io);
-            for (ptrs[0..count]) |pr| pr.queue.close(io);
+            for (snap.items) |pr| pr.queue.close(io);
         }
 
         fn writeLoop(self: *Self, io: Io) !void {
