@@ -6,6 +6,7 @@ const Storage = @import("Storage.zig");
 const codec = @import("codec");
 const types = @import("types");
 const functions = @import("functions");
+const ulog = std.log.scoped(.updates);
 
 pub const HandlerEntry = struct {
     cid: u32,
@@ -421,6 +422,12 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             self.sync_stop = false;
             self.sync_event.reset();
             var sync_future = std.Io.async(io, syncLoop, .{ self, io });
+            {
+                self.mb_mutex.lockUncancelable(io);
+                const pending = self.message_box.getting_diff or self.message_box.getting_channel_diff.count() > 0;
+                self.mb_mutex.unlock(io);
+                if (pending) self.sync_event.set(io);
+            }
             defer {
                 self.sync_stop = true;
                 self.sync_event.set(io);
@@ -461,6 +468,18 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     self.message_box.deinit(self.allocator);
                     self.message_box = .{};
                 };
+                ulog.info("loaded state pts={} qts={} date={} seq={} channels={}", .{
+                    self.message_box.pts, self.message_box.qts,
+                    self.message_box.date, self.message_box.seq,
+                    self.message_box.channels.count(),
+                });
+                if (self.message_box.pts != 0) self.message_box.getting_diff = true;
+                var it = self.message_box.channels.keyIterator();
+                while (it.next()) |k| {
+                    self.message_box.getting_channel_diff.put(self.allocator, k.*, {}) catch {};
+                }
+            } else {
+                ulog.info("no persisted state", .{});
             }
             const need_state = blk: {
                 self.mb_mutex.lockUncancelable(io);
@@ -473,6 +492,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 self.mb_mutex.lockUncancelable(io);
                 self.message_box.setState(st);
                 self.mb_mutex.unlock(io);
+                ulog.info("GetState -> pts={} qts={} date={} seq={}", .{ st.pts, st.qts, st.date, st.seq });
             }
             self.state_initialized = true;
         }
@@ -485,8 +505,11 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 } }) catch {};
                 self.sync_event.reset();
                 if (self.closed or self.sync_stop) return;
+                ulog.info("syncLoop wake: getting_diff={} channel_gaps={}", .{
+                    self.message_box.getting_diff, self.message_box.getting_channel_diff.count(),
+                });
                 self.drainDifferences(io) catch |err|
-                    std.log.debug("drainDifferences: {}", .{err});
+                    ulog.warn("drainDifferences: {}", .{err});
             }
         }
 
@@ -510,6 +533,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         }
 
         fn fetchCommonDiff(self: *Self, io: Io, gd: functions.updates.GetDifference) !void {
+            ulog.info("GetDifference pts={} qts={} date={}", .{ gd.pts, gd.qts, gd.date });
             const diff = try self.call(io, gd);
             defer codec.free(@TypeOf(diff), diff, self.allocator);
             var arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -522,6 +546,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 self.recordChannelHashesLocked(a.chats);
                 break :blk a;
             };
+            ulog.info("applyDifference -> pts={} ups={} has_more={}", .{
+                self.message_box.pts, applied.updates.len, applied.has_more,
+            });
             try self.dispatchUpdateSlice(io, arena.allocator(), applied.updates, applied.users, applied.chats);
         }
 
@@ -534,10 +561,11 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     req.channel = ic;
                 } else {
                     _ = self.message_box.getting_channel_diff.remove(id);
-                    std.log.debug("channel {} access_hash unknown, skipping diff", .{id});
+                    ulog.warn("channel {} access_hash unknown, skipping diff", .{id});
                     return;
                 }
             }
+            ulog.info("GetChannelDifference channel={} pts={}", .{ id, req.pts });
             const diff = try self.call(io, req);
             defer codec.free(@TypeOf(diff), diff, self.allocator);
             var arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -550,6 +578,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 self.recordChannelHashesLocked(a.chats);
                 break :blk a;
             };
+            ulog.info("applyChannelDifference ch={} ups={} has_more={}", .{
+                id, applied.updates.len, applied.has_more,
+            });
             try self.dispatchUpdateSlice(io, arena.allocator(), applied.updates, applied.users, applied.chats);
         }
 
@@ -715,6 +746,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 applied = res.applied;
                 gap = self.message_box.getting_diff or self.message_box.getting_channel_diff.count() > 0;
             }
+            ulog.debug("routeUpdates: in={} applied={} gap={} pts={} qts={}", .{
+                updates.len, applied.len, gap, self.message_box.pts, self.message_box.qts,
+            });
             try self.dispatchUpdateSlice(io, arena_alloc, applied, users, chats);
             if (gap) self.sync_event.set(io);
         }

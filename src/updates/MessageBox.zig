@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types");
 const functions = @import("functions");
 const MessageBox = @This();
+const ulog = std.log.scoped(.updates);
 
 pub const ChannelState = struct { pts: i32, access_hash: i64 };
 
@@ -238,7 +239,9 @@ pub fn processUpdates(
 
     var applied: std.ArrayListUnmanaged(types.Update) = .empty;
     for (sorted) |u| {
+        const tag = @tagName(u);
         const info = ptsInfo(u) orelse {
+            ulog.debug("apply (no pts) {s}", .{tag});
             try applied.append(arena, u);
             continue;
         };
@@ -246,19 +249,28 @@ pub fn processUpdates(
             .common => self.getting_diff,
             .channel => |id| self.getting_channel_diff.contains(id),
         };
-        if (gapping) continue;
+        if (gapping) {
+            ulog.debug("skip (gap pending) {s} entry={} pts={}", .{ tag, info.entry, info.pts });
+            continue;
+        }
 
         const local = self.localPts(info.entry) orelse {
+            ulog.debug("gap (unknown entry) {s} entry={} pts={}", .{ tag, info.entry, info.pts });
             try self.markGap(gpa, info.entry);
             continue;
         };
         const expected = local + info.count;
         if (info.pts <= local) {
+            ulog.debug("dup {s} entry={} pts={} <= local={}", .{ tag, info.entry, info.pts, local });
             continue;
         } else if (info.pts == expected) {
+            ulog.debug("apply {s} entry={} pts={} (local {} -> {})", .{ tag, info.entry, info.pts, local, info.pts });
             try self.setLocalPts(gpa, info.entry, info.pts);
             try applied.append(arena, u);
         } else {
+            ulog.debug("gap {s} entry={} pts={} count={} local={} expected={}", .{
+                tag, info.entry, info.pts, info.count, local, expected,
+            });
             try self.markGap(gpa, info.entry);
         }
     }
