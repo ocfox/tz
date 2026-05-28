@@ -1,6 +1,6 @@
 # tz
 
-telegram mtproto client in zig 0.16. wip.
+telegram mtproto client in zig 0.16. zero dependency. wip.
 
 echo bot: ~700kb statically linked (`ReleaseSmall`).
 
@@ -20,7 +20,6 @@ const handlers = &.{
     tz.handler(tg.UpdateNewMessage, onMessage),
 };
 
-// boot
 var storage = tz.Storage.File.init("bot.session");
 const client = try tz.Client(handlers).init(allocator, .{
     .api_id    = api_id,
