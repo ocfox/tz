@@ -469,8 +469,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     self.message_box = .{};
                 };
                 ulog.info("loaded state pts={} qts={} date={} seq={} channels={}", .{
-                    self.message_box.pts, self.message_box.qts,
-                    self.message_box.date, self.message_box.seq,
+                    self.message_box.pts,              self.message_box.qts,
+                    self.message_box.date,             self.message_box.seq,
                     self.message_box.channels.count(),
                 });
                 if (self.message_box.pts != 0) self.message_box.getting_diff = true;
@@ -505,7 +505,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 } }) catch {};
                 self.sync_event.reset();
                 if (self.closed or self.sync_stop) return;
-                ulog.info("syncLoop wake: getting_diff={} channel_gaps={}", .{
+                ulog.debug("syncLoop wake: getting_diff={} channel_gaps={}", .{
                     self.message_box.getting_diff, self.message_box.getting_channel_diff.count(),
                 });
                 self.drainDifferences(io) catch |err|
