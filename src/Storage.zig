@@ -68,6 +68,7 @@ fn readAll(io: Io, gpa: std.mem.Allocator, path: []const u8) !Parsed {
     var parsed = Parsed{};
     const count = try r.takeInt(u8, .little);
     for (0..count) |_| {
+        // SAFETY: immediately overwritten by readSliceAll before any field is read.
         var sd: SessionData = undefined;
         try r.readSliceAll(std.mem.asBytes(&sd));
         if (sd.dc_id >= 1 and sd.dc_id <= max_dc_id) parsed.sessions[sd.dc_id - 1] = sd;

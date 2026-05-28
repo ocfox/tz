@@ -476,7 +476,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 if (self.message_box.pts != 0) self.message_box.getting_diff = true;
                 var it = self.message_box.channels.keyIterator();
                 while (it.next()) |k| {
-                    self.message_box.getting_channel_diff.put(self.allocator, k.*, {}) catch {};
+                    try self.message_box.getting_channel_diff.put(self.allocator, k.*, {});
                 }
             } else {
                 ulog.info("no persisted state", .{});
@@ -502,7 +502,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 self.sync_event.waitTimeout(io, .{ .duration = .{
                     .raw = std.Io.Duration.fromSeconds(60),
                     .clock = .awake,
-                } }) catch {};
+                } }) catch |err| ulog.debug("syncLoop waitTimeout: {}", .{err});
                 self.sync_event.reset();
                 if (self.closed or self.sync_stop) return;
                 ulog.debug("syncLoop wake: getting_diff={} channel_gaps={}", .{
@@ -542,7 +542,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 self.mb_mutex.lockUncancelable(io);
                 defer self.mb_mutex.unlock(io);
                 const a = try self.message_box.applyDifference(arena.allocator(), diff);
-                self.peer_cache.update(self.allocator, a.users, a.chats) catch {};
+                try self.peer_cache.update(self.allocator, a.users, a.chats);
                 self.recordChannelHashesLocked(a.chats);
                 break :blk a;
             };
@@ -574,7 +574,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 self.mb_mutex.lockUncancelable(io);
                 defer self.mb_mutex.unlock(io);
                 const a = try self.message_box.applyChannelDifference(self.allocator, arena.allocator(), id, diff);
-                self.peer_cache.update(self.allocator, a.users, a.chats) catch {};
+                try self.peer_cache.update(self.allocator, a.users, a.chats);
                 self.recordChannelHashesLocked(a.chats);
                 break :blk a;
             };

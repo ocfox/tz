@@ -16,6 +16,7 @@ const PendingRequest = struct {
     plaintext: []const u8 = &.{},
 
     fn init() PendingRequest {
+        // SAFETY: buf is unread until queue pushes into it; queue and plaintext are set below.
         var pr: PendingRequest = undefined;
         pr.queue = std.Io.Queue([]u8).init(&pr.buf);
         pr.plaintext = &.{};
@@ -315,7 +316,8 @@ pub fn MtProto(comptime Handler: type) type {
             {
                 self.pending_mutex.lockUncancelable(io);
                 var it = self.pending.valueIterator();
-                while (it.next()) |pr| snap.append(self.allocator, pr.*) catch {};
+                while (it.next()) |pr| snap.append(self.allocator, pr.*) catch |err|
+                    std.log.warn("retryPending: drop pending request: {}", .{err});
                 self.pending.clearRetainingCapacity();
                 self.pending_mutex.unlock(io);
             }

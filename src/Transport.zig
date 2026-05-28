@@ -12,11 +12,12 @@ init_sent: bool = false,
 // from the socket in one syscall; recreating it per-frame (with a stack buffer)
 // would discard the over-read bytes and desync framing. Lazily initialized on
 // first readFrame so its buffer pointer refers to this struct's final address.
-read_buf: [16 * 1024]u8 = undefined,
+read_buf: [16 * 1024]u8,
 reader: ?Io.net.Stream.Reader = null,
 
 pub fn init(stream: Io.net.Stream, mode: Mode) Transport {
-    return .{ .stream = stream, .mode = mode };
+    // SAFETY: read_buf is only read after reader is initialized on first readFrame.
+    return .{ .stream = stream, .mode = mode, .read_buf = undefined };
 }
 
 pub fn sendInit(self: *Transport, io: Io) !void {
