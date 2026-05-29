@@ -195,7 +195,11 @@ pub const ProcessResult = struct {
 fn localPts(self: *MessageBox, entry: Entry) ?i32 {
     return switch (entry) {
         .common => self.pts,
-        .channel => |id| if (self.channels.get(id)) |c| c.pts else null,
+        // A channel may be present in the map with pts == 0 because its access_hash was
+        // recorded (recordChannelHashes) before we ever held a pts baseline. Real channel
+        // pts are >= 1, so treat 0 as "unknown" — the first pts-bearing update then seeds
+        // it instead of forcing a difference from 0 (rejected as PERSISTENT_TIMESTAMP_EMPTY).
+        .channel => |id| if (self.channels.get(id)) |c| (if (c.pts == 0) null else c.pts) else null,
     };
 }
 
@@ -255,8 +259,13 @@ pub fn processUpdates(
         }
 
         const local = self.localPts(info.entry) orelse {
-            ulog.debug("gap (unknown entry) {s} entry={} pts={}", .{ tag, info.entry, info.pts });
-            try self.markGap(gpa, info.entry);
+            // First sighting of this entry (e.g. a channel we have no pts for). There is
+            // no baseline to detect a gap against, and GetChannelDifference from pts=0 is
+            // rejected with PERSISTENT_TIMESTAMP_EMPTY — so adopt this pts as the starting
+            // point and apply the update directly instead of requesting a difference.
+            ulog.debug("seed (new entry) {s} entry={} pts={}", .{ tag, info.entry, info.pts });
+            try self.setLocalPts(gpa, info.entry, info.pts);
+            try applied.append(arena, u);
             continue;
         };
         const expected = local + info.count;
@@ -328,6 +337,47 @@ test "processUpdates: duplicate (pts <= local) skipped" {
     const res = try mb.processUpdates(gpa, arena.allocator(), &ups);
     try std.testing.expectEqual(@as(usize, 0), res.applied.len);
     try std.testing.expect(!mb.getting_diff);
+}
+
+test "processUpdates: first sighting of a channel seeds pts and applies (no diff)" {
+    const gpa = std.testing.allocator;
+    var mb = MessageBox{};
+    defer mb.deinit(gpa);
+    // Channel 777 has never been seen — no local pts. The update must be applied and
+    // its pts adopted, NOT queued for a difference (which would hit pts=0 -> error).
+    const ups = [_]types.Update{.{ .UpdateDeleteChannelMessages = .{
+        .channel_id = 777,
+        .messages = &.{},
+        .pts = 5,
+        .pts_count = 1,
+    } }};
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const res = try mb.processUpdates(gpa, arena.allocator(), &ups);
+    try std.testing.expectEqual(@as(usize, 1), res.applied.len);
+    try std.testing.expect(!mb.getting_channel_diff.contains(777));
+    try std.testing.expectEqual(@as(i32, 5), mb.channels.get(777).?.pts);
+}
+
+test "processUpdates: channel with recorded access_hash but pts=0 seeds, not gaps" {
+    const gpa = std.testing.allocator;
+    var mb = MessageBox{};
+    defer mb.deinit(gpa);
+    // Simulates recordChannelHashes: access_hash known, but no pts baseline yet (pts=0).
+    try mb.channels.put(gpa, 888, .{ .pts = 0, .access_hash = 42 });
+    const ups = [_]types.Update{.{ .UpdateDeleteChannelMessages = .{
+        .channel_id = 888,
+        .messages = &.{},
+        .pts = 5,
+        .pts_count = 1,
+    } }};
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const res = try mb.processUpdates(gpa, arena.allocator(), &ups);
+    try std.testing.expectEqual(@as(usize, 1), res.applied.len);
+    try std.testing.expect(!mb.getting_channel_diff.contains(888));
+    try std.testing.expectEqual(@as(i32, 5), mb.channels.get(888).?.pts);
+    try std.testing.expectEqual(@as(i64, 42), mb.channels.get(888).?.access_hash); // preserved
 }
 
 test "processUpdates: no-pts update always applied" {
