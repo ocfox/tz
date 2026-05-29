@@ -75,6 +75,8 @@ pub const Context = struct {
     client: *anyopaque,
     io: Io,
     allocator: Allocator,
+    api_id: i32,
+    api_hash: []const u8,
     entities: Entities,
     peer_cache: *const @import("updates/PeerCache.zig"),
     mb_mutex: *std.Io.Mutex,
@@ -152,7 +154,9 @@ pub const ClientOptions = struct {
     /// Called once after the first successful connection, before the update loop.
     /// Receives an opaque pointer to the Client; cast with @ptrCast(@alignCast(ptr)).
     /// Use this for interactive user auth (sendCode / signIn). Ignored when bot_token is set.
-    auth_fn: ?*const fn (*anyopaque, Io) anyerror!void = null,
+    /// Receives a `Context` — call TL functions through `ctx.call` / `ctx.exec`, same as
+    /// in update handlers; `ctx.api_id` / `ctx.api_hash` are available for the initial sendCode.
+    auth_fn: ?*const fn (Context) anyerror!void = null,
     api_id: i32,
     api_hash: []const u8,
     storage: Storage,
@@ -447,7 +451,18 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 }
             } else if (self.opts.auth_fn) |f| {
                 if (!self.user_authorized) {
-                    try f(self, io);
+                    try f(Context{
+                        .client = self,
+                        .io = io,
+                        .allocator = self.allocator,
+                        .api_id = self.opts.api_id,
+                        .api_hash = self.opts.api_hash,
+                        .entities = .{},
+                        .peer_cache = &self.peer_cache,
+                        .mb_mutex = &self.mb_mutex,
+                        .callFn = callImpl,
+                        .callFileFn = callFileImpl,
+                    });
                     self.user_authorized = true;
                     self.markHomeDc(io);
                 }
@@ -744,6 +759,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .client = self,
                 .io = io,
                 .allocator = self.allocator,
+                .api_id = self.opts.api_id,
+                .api_hash = self.opts.api_hash,
                 .entities = entities,
                 .peer_cache = &self.peer_cache,
                 .mb_mutex = &self.mb_mutex,
