@@ -78,7 +78,7 @@ pub const Context = struct {
     api_id: i32,
     api_hash: []const u8,
     entities: Entities,
-    peer_cache: *const @import("updates/PeerCache.zig"),
+    peer_cache: *const @import("State.zig").PeerCache,
     mb_mutex: *std.Io.Mutex,
     callFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
     /// Like callFn but routes FILE_MIGRATE to a sub-connection automatically.
@@ -177,8 +177,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         dc_list: ?[]Connector.DC = null,
         sub_conns: std.AutoHashMapUnmanaged(u8, *Connector) = .empty,
         sub_conns_mu: std.Io.Mutex = std.Io.Mutex.init,
-        message_box: @import("updates/MessageBox.zig") = .{},
-        peer_cache: @import("updates/PeerCache.zig") = .{},
+        state: @import("State.zig") = .{},
         mb_mutex: std.Io.Mutex = .init,
         state_initialized: bool = false,
         sync_event: std.Io.Event = .unset,
@@ -195,8 +194,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             // Sub-conns should have been closed in runOnce's defer; clean up any stragglers.
             var it = self.sub_conns.valueIterator();
             while (it.next()) |conn| conn.*.deinit();
-            self.message_box.deinit(self.allocator);
-            self.peer_cache.deinit(self.allocator);
+            self.state.deinit(self.allocator);
             self.sub_conns.deinit(self.allocator);
             self.allocator.destroy(self);
         }
@@ -461,7 +459,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                         .api_id = self.opts.api_id,
                         .api_hash = self.opts.api_hash,
                         .entities = .{},
-                        .peer_cache = &self.peer_cache,
+                        .peer_cache = &self.state.peers,
                         .mb_mutex = &self.mb_mutex,
                         .callFn = callImpl,
                         .callFileFn = callFileImpl,
@@ -480,7 +478,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             var sync_future = std.Io.async(io, syncLoop, .{ self, io });
             {
                 self.mb_mutex.lockUncancelable(io);
-                const pending = self.message_box.getting_diff or self.message_box.getting_channel_diff.count() > 0;
+                const pending = self.state.getting_diff or self.state.getting_channel_diff.count() > 0;
                 self.mb_mutex.unlock(io);
                 if (pending) self.sync_event.set(io);
             }
@@ -520,20 +518,20 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 var r: std.Io.Reader = .fixed(blob);
                 self.mb_mutex.lockUncancelable(io);
                 defer self.mb_mutex.unlock(io);
-                self.message_box.deserialize(self.allocator, &r) catch |e| {
+                self.state.deserialize(self.allocator, &r) catch |e| {
                     std.log.warn("update state deserialize failed ({}), resetting", .{e});
-                    self.message_box.deinit(self.allocator);
-                    self.message_box = .{};
+                    self.state.deinit(self.allocator);
+                    self.state = .{};
                 };
                 ulog.info("loaded state pts={} qts={} date={} seq={} channels={}", .{
-                    self.message_box.pts,              self.message_box.qts,
-                    self.message_box.date,             self.message_box.seq,
-                    self.message_box.channels.count(),
+                    self.state.pts,              self.state.qts,
+                    self.state.date,             self.state.seq,
+                    self.state.channels.count(),
                 });
-                if (self.message_box.pts != 0) self.message_box.getting_diff = true;
-                var it = self.message_box.channels.keyIterator();
+                if (self.state.pts != 0) self.state.getting_diff = true;
+                var it = self.state.channels.keyIterator();
                 while (it.next()) |k| {
-                    try self.message_box.getting_channel_diff.put(self.allocator, k.*, {});
+                    try self.state.getting_channel_diff.put(self.allocator, k.*, {});
                 }
             } else {
                 ulog.info("no persisted state", .{});
@@ -541,14 +539,14 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const need_state = blk: {
                 self.mb_mutex.lockUncancelable(io);
                 defer self.mb_mutex.unlock(io);
-                break :blk self.message_box.pts == 0;
+                break :blk self.state.pts == 0;
             };
             if (need_state) {
                 const st_resp = try self.call(io, functions.updates.GetState{});
                 defer st_resp.deinit();
                 const st = st_resp.value;
                 self.mb_mutex.lockUncancelable(io);
-                self.message_box.setState(st);
+                self.state.setState(st);
                 self.mb_mutex.unlock(io);
                 ulog.info("GetState -> pts={} qts={} date={} seq={}", .{ st.pts, st.qts, st.date, st.seq });
             }
@@ -564,7 +562,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 self.sync_event.reset();
                 if (self.closed or self.sync_stop) return;
                 ulog.debug("syncLoop wake: getting_diff={} channel_gaps={}", .{
-                    self.message_box.getting_diff, self.message_box.getting_channel_diff.count(),
+                    self.state.getting_diff, self.state.getting_channel_diff.count(),
                 });
                 self.drainDifferences(io) catch |err|
                     ulog.warn("drainDifferences: {}", .{err});
@@ -579,7 +577,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 const req = blk: {
                     self.mb_mutex.lockUncancelable(io);
                     defer self.mb_mutex.unlock(io);
-                    break :blk self.message_box.takeDifferenceRequest();
+                    break :blk self.state.takeDifferenceRequest();
                 } orelse break;
                 changed = true;
                 switch (req) {
@@ -600,13 +598,13 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const applied = blk: {
                 self.mb_mutex.lockUncancelable(io);
                 defer self.mb_mutex.unlock(io);
-                const a = try self.message_box.applyDifference(arena.allocator(), diff);
-                try self.peer_cache.update(self.allocator, a.users, a.chats);
+                const a = try self.state.applyDifference(arena.allocator(), diff);
+                try self.state.peers.update(self.allocator, a.users, a.chats);
                 self.recordChannelHashesLocked(a.chats);
                 break :blk a;
             };
             ulog.info("applyDifference -> pts={} ups={} has_more={}", .{
-                self.message_box.pts, applied.updates.len, applied.has_more,
+                self.state.pts, applied.updates.len, applied.has_more,
             });
             try self.dispatchUpdateSlice(io, arena.allocator(), applied.updates, applied.users, applied.chats);
         }
@@ -616,10 +614,10 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             {
                 self.mb_mutex.lockUncancelable(io);
                 defer self.mb_mutex.unlock(io);
-                if (self.peer_cache.inputChannel(id)) |ic| {
+                if (self.state.peers.inputChannel(id)) |ic| {
                     req.channel = ic;
                 } else {
-                    _ = self.message_box.getting_channel_diff.remove(id);
+                    _ = self.state.getting_channel_diff.remove(id);
                     ulog.warn("channel {} access_hash unknown, skipping diff", .{id});
                     return;
                 }
@@ -629,7 +627,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 error.ChannelInvalid => {
                     self.mb_mutex.lockUncancelable(io);
                     defer self.mb_mutex.unlock(io);
-                    self.message_box.dropChannel(id);
+                    self.state.dropChannel(id);
                     ulog.warn("channel {} invalid, dropping from diff tracking", .{id});
                     return;
                 },
@@ -642,8 +640,8 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const applied = blk: {
                 self.mb_mutex.lockUncancelable(io);
                 defer self.mb_mutex.unlock(io);
-                const a = try self.message_box.applyChannelDifference(self.allocator, arena.allocator(), id, diff);
-                try self.peer_cache.update(self.allocator, a.users, a.chats);
+                const a = try self.state.applyChannelDifference(self.allocator, arena.allocator(), id, diff);
+                try self.state.peers.update(self.allocator, a.users, a.chats);
                 self.recordChannelHashesLocked(a.chats);
                 break :blk a;
             };
@@ -659,7 +657,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             {
                 self.mb_mutex.lockUncancelable(io);
                 defer self.mb_mutex.unlock(io);
-                self.message_box.serialize(&aw.writer) catch |e| {
+                self.state.serialize(&aw.writer) catch |e| {
                     std.log.debug("serialize state: {}", .{e});
                     return;
                 };
@@ -748,7 +746,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     std.log.warn("update dispatch error: {}", .{err}),
                 types.UpdatesTooLong.cid => {
                     self.mb_mutex.lockUncancelable(io);
-                    self.message_box.getting_diff = true;
+                    self.state.getting_diff = true;
                     self.mb_mutex.unlock(io);
                     self.sync_event.set(io);
                 },
@@ -783,7 +781,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .api_id = self.opts.api_id,
                 .api_hash = self.opts.api_hash,
                 .entities = entities,
-                .peer_cache = &self.peer_cache,
+                .peer_cache = &self.state.peers,
                 .mb_mutex = &self.mb_mutex,
                 .callFn = callImpl,
                 .callFileFn = callFileImpl,
@@ -802,13 +800,14 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             }
         }
 
-        /// Runs updates through the MessageBox, applies peer info, then dispatches
-        /// the confirmed-order updates. On gap, signals sync_event (never blocks).
+        /// Runs a container of updates through the State, applies peer info, then
+        /// dispatches the confirmed-order updates. On gap, signals sync_event
+        /// (never blocks).
         fn routeUpdates(
             self: *Self,
             io: Io,
             arena_alloc: Allocator,
-            updates: []const types.Update,
+            c: @import("State.zig").Container,
             users: []const types.User,
             chats: []const types.Chat,
         ) !void {
@@ -817,18 +816,18 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             {
                 self.mb_mutex.lockUncancelable(io);
                 defer self.mb_mutex.unlock(io);
-                self.peer_cache.update(self.allocator, users, chats) catch |e|
+                self.state.peers.update(self.allocator, users, chats) catch |e|
                     std.log.debug("peer_cache: {}", .{e});
                 self.recordChannelHashesLocked(chats);
-                const res = self.message_box.processUpdates(self.allocator, arena_alloc, updates) catch |e| {
-                    std.log.debug("processUpdates: {}", .{e});
+                const res = self.state.process(self.allocator, arena_alloc, c) catch |e| {
+                    std.log.debug("process updates: {}", .{e});
                     return;
                 };
                 applied = res.applied;
-                gap = self.message_box.getting_diff or self.message_box.getting_channel_diff.count() > 0;
+                gap = self.state.getting_diff or self.state.getting_channel_diff.count() > 0;
             }
             ulog.debug("routeUpdates: in={} applied={} gap={} pts={} qts={}", .{
-                updates.len, applied.len, gap, self.message_box.pts, self.message_box.qts,
+                c.updates.len, applied.len, gap, self.state.pts, self.state.qts,
             });
             try self.dispatchUpdateSlice(io, arena_alloc, applied, users, chats);
             if (gap) self.sync_event.set(io);
@@ -838,7 +837,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         fn recordChannelHashesLocked(self: *Self, chats: []const types.Chat) void {
             for (chats) |c| switch (c) {
                 .Channel => |ch| if (ch.access_hash.value) |ah| {
-                    const gop = self.message_box.channels.getOrPut(self.allocator, ch.id) catch return;
+                    const gop = self.state.channels.getOrPut(self.allocator, ch.id) catch return;
                     if (gop.found_existing) {
                         gop.value_ptr.access_hash = ah;
                     } else {
@@ -857,10 +856,22 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             const cid = std.mem.readInt(u32, payload[0..4], .little);
             if (cid == types.UpdatesCombined.cid) {
                 const upd = try codec.decodeStructBody(types.UpdatesCombined, &r, arena_alloc);
-                try self.routeUpdates(io, arena_alloc, upd.updates, upd.users, upd.chats);
+                try self.routeUpdates(io, arena_alloc, .{
+                    .date = upd.date,
+                    .seq = upd.seq,
+                    .seq_start = upd.seq_start,
+                    .updates = upd.updates,
+                }, upd.users, upd.chats);
             } else {
                 const upd = try codec.decodeStructBody(types.Updates_, &r, arena_alloc);
-                try self.routeUpdates(io, arena_alloc, upd.updates, upd.users, upd.chats);
+                // The bare `updates` container has no seq_start; its single group
+                // spans seq..seq, so seq_start == seq for the gap check.
+                try self.routeUpdates(io, arena_alloc, .{
+                    .date = upd.date,
+                    .seq = upd.seq,
+                    .seq_start = upd.seq,
+                    .updates = upd.updates,
+                }, upd.users, upd.chats);
             }
         }
 
@@ -871,7 +882,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             var r: std.Io.Reader = .fixed(payload[4..]);
             const upd = try codec.decodeStructBody(types.UpdateShort, &r, arena_alloc);
             const updates = [_]types.Update{upd.update};
-            try self.routeUpdates(io, arena_alloc, &updates, &.{}, &.{});
+            try self.routeUpdates(io, arena_alloc, .{ .date = upd.date, .updates = &updates }, &.{}, &.{});
         }
 
         fn dispatchShortMessage(self: *Self, io: Io, payload: []const u8) !void {
@@ -901,7 +912,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .pts = short.pts,
                 .pts_count = short.pts_count,
             } }};
-            try self.routeUpdates(io, arena_alloc, &updates, &.{}, &.{});
+            try self.routeUpdates(io, arena_alloc, .{ .date = short.date, .updates = &updates }, &.{}, &.{});
         }
 
         fn dispatchShortChatMessage(self: *Self, io: Io, payload: []const u8) !void {
@@ -931,7 +942,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .pts = short.pts,
                 .pts_count = short.pts_count,
             } }};
-            try self.routeUpdates(io, arena_alloc, &updates, &.{}, &.{});
+            try self.routeUpdates(io, arena_alloc, .{ .date = short.date, .updates = &updates }, &.{}, &.{});
         }
     };
 }
