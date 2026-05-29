@@ -622,7 +622,16 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 }
             }
             ulog.info("GetChannelDifference channel={} pts={}", .{ id, req.pts });
-            const diff_resp = try self.call(io, req);
+            const diff_resp = self.call(io, req) catch |err| switch (err) {
+                error.ChannelInvalid => {
+                    self.mb_mutex.lockUncancelable(io);
+                    defer self.mb_mutex.unlock(io);
+                    self.message_box.dropChannel(id);
+                    ulog.warn("channel {} invalid, dropping from diff tracking", .{id});
+                    return;
+                },
+                else => return err,
+            };
             defer diff_resp.deinit();
             const diff = diff_resp.value;
             var arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -715,6 +724,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             // re-prompt in place instead of tearing down the connection.
             if (std.mem.eql(u8, msg, "PHONE_CODE_INVALID")) return error.PhoneCodeInvalid;
             if (std.mem.eql(u8, msg, "PASSWORD_HASH_INVALID")) return error.PasswordHashInvalid;
+            // Channel we can't access: permanent, so the diff loop must drop it
+            // rather than retry forever.
+            if (std.mem.eql(u8, msg, "CHANNEL_INVALID")) return error.ChannelInvalid;
             return error.RpcError;
         }
 

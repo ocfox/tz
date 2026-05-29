@@ -357,6 +357,14 @@ pub const Request = union(enum) {
     channel: struct { id: i64, req: functions.updates.GetChannelDifference },
 };
 
+/// Stop tracking a channel entirely — drops both the pending gap and its pts state.
+/// Used when the server reports the channel is inaccessible (CHANNEL_INVALID), where
+/// retrying the difference would loop forever.
+pub fn dropChannel(self: *MessageBox, id: i64) void {
+    _ = self.getting_channel_diff.remove(id);
+    _ = self.channels.remove(id);
+}
+
 /// Returns a pending difference request if any gap is set. Common takes priority.
 /// For channel requests the caller must resolve access_hash (channel field is Empty here).
 pub fn takeDifferenceRequest(self: *MessageBox) ?Request {
