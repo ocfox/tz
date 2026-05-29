@@ -31,9 +31,8 @@ defer client.deinit();
 try client.run(io);
 ```
 
-call any tl function directly. `call` returns a `Response(T)` that owns the decoded
-value and all its nested allocations — free the whole tree with `deinit()`. Use
-`exec` instead when you don't need the response (it allocates nothing for the reply):
+call any tl function directly. `call` hands back a `Response(T)`. `deinit()` when done,
+data's in `resp.value`. `exec` if you don't need the reply.
 
 ```zig
 var id_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
@@ -73,6 +72,40 @@ if (try h.route(ctx, update, msg.message, &.{
     R.exact("/start", onStart),
     R.prefix("/echo ", onEcho),
 })) return;
+```
+
+## memory
+
+whatever you hand to `Client.init` owns everything.
+
+- `call` gives a `Response(T)`. its data and everything under it sit in one arena. `resp.deinit()` when you're done, it all goes. the data's in `resp.value`. don't need the reply, use `exec`. nothing to free, no decode.
+- the helpers that return things (`getMe`, `getUsers`, `getChats`, `getChannels`) are the same. `Response(T)`, `deinit()` when done. the slice lives in the arena. gone after deinit.
+- borrowed slices (a photo's `file_reference`, a `first_name`) point into the response arena. keep the `Response` while you use them.
+- `h.download` is different. plain `[]u8` off `ctx.allocator`. free it yourself.
+- handlers only borrow. the `update` and `ctx.entities` are gone once the handler returns. copy out what you keep.
+- `ctx.allocator` is there for scratch.
+
+```zig
+// a response owns its data; deinit frees the whole tree at once
+const resp = try h.getUsers(ctx, ids);
+defer resp.deinit();
+for (resp.value) |user| log(user); // borrowed — valid only until deinit
+
+// staging several uploads for one sendMultiMedia: the file_references live
+// in each response's arena, so hold them all until after the send
+var staged: [n]tz.Response(f.messages.UploadMedia.Response) = undefined;
+defer for (&staged) |s| s.deinit();
+for (urls, 0..) |url, i| {
+    staged[i] = try ctx.call(f.messages.UploadMedia{ ... });
+    multi[i] = .{ .media = inputFrom(staged[i].value), ... }; // borrows file_reference
+}
+try ctx.exec(f.messages.SendMultiMedia{ .multi_media = &multi }); // refs still alive
+
+// handler data is freed on return — copy out what you keep
+fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
+    const text = try ctx.allocator.dupe(u8, update.message.Message.message);
+    // ... stash `text` somewhere; you own it now, free it later
+}
 ```
 
 see [examples/](examples/).
