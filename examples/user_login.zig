@@ -11,6 +11,14 @@ const tz = @import("tz");
 const tg = tz.types;
 const functions = @import("functions");
 
+// Quiet the per-packet debug logs so they don't interleave with the interactive
+// prompts. Bump to .debug if you need to see the wire traffic.
+pub const std_options: std.Options = .{ .log_level = .info };
+
+// Remembered across auth_fn invocations: a DC migration (PHONE_MIGRATE) tears down
+// and re-runs auth, and we don't want to re-prompt for the phone number each time.
+var cached_phone: ?[]u8 = null;
+
 fn onNewMessage(_: tz.Context, update: tg.UpdateNewMessage) !void {
     const msg = switch (update.message) {
         .Message => |m| m,
@@ -30,7 +38,9 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, in: *std.Io.Reader, label:
     var ew = std.Io.File.stderr().writer(io, &obuf);
     try ew.interface.writeAll(label);
     try ew.interface.flush();
-    const line = try in.takeDelimiterExclusive('\n');
+    // takeDelimiter consumes the '\n'; takeDelimiterExclusive would leave it in the
+    // buffer and the next read would return an empty line.
+    const line = (try in.takeDelimiter('\n')) orelse return error.EndOfInput;
     return allocator.dupe(u8, std.mem.trimEnd(u8, line, "\r \t"));
 }
 
@@ -41,8 +51,12 @@ fn userAuth(ctx: tz.Context) !void {
     var fr = std.Io.File.stdin().reader(ctx.io, &ibuf);
     const in = &fr.interface;
 
-    const phone = try readLine(ctx.allocator, ctx.io, in, "phone number (e.g. +12345678900): ");
-    defer ctx.allocator.free(phone);
+    // prompt once; reuse on later auth_fn runs (e.g. after a DC migration).
+    const phone = cached_phone orelse blk: {
+        const p = try readLine(ctx.allocator, ctx.io, in, "phone number (e.g. +12345678900): ");
+        cached_phone = p;
+        break :blk p;
+    };
 
     // step 1: request a code. phone_code_hash comes back in the response.
     const sent = try ctx.call(functions.auth.SendCode{
@@ -58,57 +72,77 @@ fn userAuth(ctx: tz.Context) !void {
         .AuthSentCodePaymentRequired => return error.PaymentRequired,
     };
 
-    // step 2: sign in with the code the user just received.
-    const code = try readLine(ctx.allocator, ctx.io, in, "login code: ");
-    defer ctx.allocator.free(code);
+    // step 2: sign in with the code. a wrong code re-prompts in place — the lib
+    // surfaces PHONE_CODE_INVALID distinctly so we don't tear down the connection.
+    while (true) {
+        const code = try readLine(ctx.allocator, ctx.io, in, "login code: ");
+        defer ctx.allocator.free(code);
 
-    ctx.exec(functions.auth.SignIn{
-        .phone_number = phone,
-        .phone_code_hash = phone_code_hash,
-        .phone_code = .some(code),
-    }) catch |err| switch (err) {
-        error.SessionPasswordNeeded => return signIn2FA(ctx, in),
-        else => return err,
-    };
+        ctx.exec(functions.auth.SignIn{
+            .phone_number = phone,
+            .phone_code_hash = phone_code_hash,
+            .phone_code = .some(code),
+        }) catch |err| switch (err) {
+            error.PhoneCodeInvalid => {
+                std.log.warn("invalid code, try again", .{});
+                continue;
+            },
+            error.SessionPasswordNeeded => return signIn2FA(ctx, in),
+            else => return err,
+        };
+        return; // signed in without 2FA
+    }
 }
 
 fn signIn2FA(ctx: tz.Context, in: *std.Io.Reader) !void {
-    const password = try readLine(ctx.allocator, ctx.io, in, "2FA password: ");
-    defer ctx.allocator.free(password);
+    // a wrong password re-prompts in place (PASSWORD_HASH_INVALID). GetPassword is
+    // re-fetched each attempt because the SRP challenge is single-use.
+    while (true) {
+        const password = try readLine(ctx.allocator, ctx.io, in, "2FA password: ");
+        defer ctx.allocator.free(password);
 
-    const pwd_resp = try ctx.call(functions.account.GetPassword{});
-    defer pwd_resp.deinit();
-    const pwd = pwd_resp.value;
+        const pwd_resp = try ctx.call(functions.account.GetPassword{});
+        defer pwd_resp.deinit();
+        const pwd = pwd_resp.value;
 
-    const algo = switch (pwd.current_algo.value orelse return error.NoPassword) {
-        .PasswordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow => |a| a,
-        else => return error.UnsupportedPasswordAlgo,
-    };
+        const algo = switch (pwd.current_algo.value orelse return error.NoPassword) {
+            .PasswordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow => |a| a,
+            else => return error.UnsupportedPasswordAlgo,
+        };
 
-    const answer = try tz.crypto.srp.compute(
-        ctx.allocator,
-        ctx.io,
-        algo.salt1,
-        algo.salt2,
-        algo.g,
-        algo.p,
-        pwd.srp_B.value orelse return error.NoPassword,
-        password,
-    );
+        const answer = try tz.crypto.srp.compute(
+            ctx.allocator,
+            ctx.io,
+            algo.salt1,
+            algo.salt2,
+            algo.g,
+            algo.p,
+            pwd.srp_B.value orelse return error.NoPassword,
+            password,
+        );
 
-    try ctx.exec(functions.auth.CheckPassword{
-        .password = .{ .InputCheckPasswordSRP = .{
-            .srp_id = pwd.srp_id.value orelse return error.NoPassword,
-            .A = &answer.A,
-            .M1 = &answer.M1,
-        } },
-    });
+        ctx.exec(functions.auth.CheckPassword{
+            .password = .{ .InputCheckPasswordSRP = .{
+                .srp_id = pwd.srp_id.value orelse return error.NoPassword,
+                .A = &answer.A,
+                .M1 = &answer.M1,
+            } },
+        }) catch |err| switch (err) {
+            error.PasswordHashInvalid => {
+                std.log.warn("wrong password, try again", .{});
+                continue;
+            },
+            else => return err,
+        };
+        return; // 2FA accepted
+    }
 }
 
 pub fn main(init: std.process.Init.Minimal) !void {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debug_allocator.deinit();
     const allocator = debug_allocator.allocator();
+    defer if (cached_phone) |p| allocator.free(p);
 
     var threaded = std.Io.Threaded.init(allocator, .{});
     defer threaded.deinit();

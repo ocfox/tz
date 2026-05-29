@@ -707,8 +707,14 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     return error.DcMigrate;
                 }
             }
-            if (code == 401) return error.SessionInvalid;
+            // SESSION_PASSWORD_NEEDED is a 401 but means "needs 2FA", not a dead
+            // session — match it before the blanket 401 check below.
             if (std.mem.eql(u8, msg, "SESSION_PASSWORD_NEEDED")) return error.SessionPasswordNeeded;
+            if (code == 401) return error.SessionInvalid;
+            // Retryable user-input errors: surface them distinctly so callers can
+            // re-prompt in place instead of tearing down the connection.
+            if (std.mem.eql(u8, msg, "PHONE_CODE_INVALID")) return error.PhoneCodeInvalid;
+            if (std.mem.eql(u8, msg, "PASSWORD_HASH_INVALID")) return error.PasswordHashInvalid;
             return error.RpcError;
         }
 
