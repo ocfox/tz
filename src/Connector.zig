@@ -37,7 +37,11 @@ const MtpHandler = struct {
     connector: *Connector,
 
     pub fn onUpdate(self: *MtpHandler, io: Io, payload: []const u8) void {
-        const owned = self.connector.allocator.dupe(u8, payload) catch return;
+        // OOM here drops one update; pts/qts gap detection recovers it via getDifference.
+        const owned = self.connector.allocator.dupe(u8, payload) catch |e| {
+            std.log.warn("update dropped (dupe failed): {}", .{e});
+            return;
+        };
         self.connector.update_group.concurrent(
             io,
             Connector.runUpdate,

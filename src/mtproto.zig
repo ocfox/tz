@@ -201,7 +201,10 @@ pub fn MtProto(comptime Handler: type) type {
                 types.FutureSalts.cid => self.parseFutureSalts(payload, io),
                 types.NewSessionCreated.cid => {
                     var r: std.Io.Reader = .fixed(payload);
-                    const m = codec.decode(types.NewSessionCreated, &r, self.allocator) catch return;
+                    const m = codec.decode(types.NewSessionCreated, &r, self.allocator) catch |e| {
+                        std.log.warn("new_session_created: decode failed: {}", .{e});
+                        return;
+                    };
                     self.session.server_salt = m.server_salt;
                 },
                 types.BadServerSalt.cid => {
@@ -286,12 +289,16 @@ pub fn MtProto(comptime Handler: type) type {
             var buf: [4 + 4 + 4 + 8 * max_ids]u8 = undefined;
             const ids = self.pending_acks.items[0..@min(self.pending_acks.items.len, max_ids)];
             var w: std.Io.Writer = .fixed(&buf);
-            w.writeInt(u32, types.MsgsAck.cid, .little) catch return;
-            w.writeInt(u32, 0x1cb5c415, .little) catch return; // vector cid
-            w.writeInt(u32, @intCast(ids.len), .little) catch return;
-            for (ids) |id| w.writeInt(i64, id, .little) catch return;
+            // buf is sized for exactly max_ids; these writes cannot overflow it.
+            w.writeInt(u32, types.MsgsAck.cid, .little) catch @panic("ack buf too small");
+            w.writeInt(u32, 0x1cb5c415, .little) catch @panic("ack buf too small"); // vector cid
+            w.writeInt(u32, @intCast(ids.len), .little) catch @panic("ack buf too small");
+            for (ids) |id| w.writeInt(i64, id, .little) catch @panic("ack buf too small");
             self.pending_acks.clearRetainingCapacity();
-            const enc = self.encryptLocked(w.buffered(), io, false) catch return;
+            const enc = self.encryptLocked(w.buffered(), io, false) catch |e| {
+                std.log.debug("flush_acks encrypt: {}", .{e});
+                return;
+            };
             self.write_queue.putOne(io, enc.data) catch self.allocator.free(enc.data);
         }
 
@@ -403,10 +410,14 @@ pub fn MtProto(comptime Handler: type) type {
             const funcs = @import("functions");
             var req_buf: [8]u8 = undefined;
             var w: std.Io.Writer = .fixed(&req_buf);
-            codec.encode(funcs.GetFutureSalts{ .num = 64 }, &w) catch return;
+            // req_buf is exactly cid + i32; this encode cannot overflow it.
+            codec.encode(funcs.GetFutureSalts{ .num = 64 }, &w) catch @panic("salts req buf too small");
             // Service message: fire-and-forget. Server responds with FutureSalts
             // as a standalone message (not rpc_result), handled by parseFutureSalts in dispatch.
-            const enc = self.encryptLocked(w.buffered(), io, false) catch return;
+            const enc = self.encryptLocked(w.buffered(), io, false) catch |e| {
+                std.log.debug("fetch_salts encrypt: {}", .{e});
+                return;
+            };
             self.write_queue.putOne(io, enc.data) catch self.allocator.free(enc.data);
         }
 
