@@ -8,6 +8,7 @@ pub const functions = @import("functions");
 pub const Client = client.Client;
 pub const ClientOptions = client.ClientOptions;
 pub const Context = client.Context;
+pub const Response = client.Response;
 pub const handler = client.handler;
 
 pub const Storage = @import("Storage.zig");

@@ -90,7 +90,7 @@ pub fn connect(io: Io, allocator: Allocator, opts: Options) !*Connector {
     var conn = Transport.init(stream, opts.transport);
 
     const auth_key_result = blk: {
-        if (try opts.storage.load(io, opts.dc.id)) |saved| {
+        if (try opts.storage.load(io, allocator, opts.dc.id)) |saved| {
             if (saved.dc_id != 0 and saved.dc_id == opts.dc.id) {
                 std.log.info("loaded existing session (dc={})", .{saved.dc_id});
                 break :blk auth_key.Result{
@@ -107,7 +107,7 @@ pub fn connect(io: Io, allocator: Allocator, opts: Options) !*Connector {
         std.log.info("performing DH key exchange", .{});
         const result = try auth_key.perform(&conn, io, allocator);
         std.log.info("DH key exchange complete", .{});
-        try opts.storage.save(io, .{
+        try opts.storage.save(io, allocator, .{
             .auth_key = result.auth_key,
             .auth_key_id = result.auth_key_id,
             .server_salt = result.server_salt,
@@ -165,7 +165,7 @@ pub fn join(self: *Connector, io: Io) void {
 /// Persist current session (with latest server_salt) back to storage.
 pub fn saveSession(self: *Connector, io: Io) void {
     const s = &self.mtp.session;
-    self.storage.save(io, .{
+    self.storage.save(io, self.allocator, .{
         .auth_key = s.auth_key,
         .auth_key_id = s.auth_key_id,
         .server_salt = s.server_salt,

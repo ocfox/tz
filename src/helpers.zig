@@ -3,6 +3,9 @@ const types = @import("types");
 const functions = @import("functions");
 const client = @import("client.zig");
 
+/// Convenience re-export: every helper takes a Context, so `helpers.Context` works.
+pub const Context = client.Context;
+
 pub const media = @import("helpers/media.zig");
 pub const keyboard = @import("helpers/keyboard.zig");
 pub const FormattedText = @import("helpers/FormattedText.zig");
@@ -112,10 +115,11 @@ pub fn sendChatAction(ctx: client.Context, peer: types.InputPeer, action: types.
     try ctx.exec(functions.messages.SetTyping{ .peer = peer, .action = action });
 }
 
-/// Fetch the bot's own User record. Caller owns the returned slice (ctx.allocator.free).
-pub fn getMe(ctx: client.Context) ![]const types.User {
+/// Fetch the bot's own User record. Caller owns the result; free with `resp.deinit()`.
+pub fn getMe(ctx: client.Context) !client.Response([]const types.User) {
     var id = [_]types.InputUser{.{ .InputUserSelf = .{} }};
-    return ctx.call(functions.users.GetUsers{ .id = &id });
+    const resp = try ctx.call(functions.users.GetUsers{ .id = &id });
+    return .{ .arena = resp.arena, .value = resp.value };
 }
 
 pub fn answerCallbackQuery(ctx: client.Context, update: types.UpdateBotCallbackQuery, opts: CallbackAnswerOptions) !void {
@@ -167,24 +171,31 @@ pub fn removeReaction(ctx: client.Context, peer: types.InputPeer, msg_id: i32) !
     });
 }
 
-pub fn getUsers(ctx: client.Context, ids: []const types.InputUser) ![]const types.User {
-    return ctx.call(functions.users.GetUsers{ .id = ids });
+/// Caller owns the result; free with `resp.deinit()`.
+pub fn getUsers(ctx: client.Context, ids: []const types.InputUser) !client.Response([]const types.User) {
+    const resp = try ctx.call(functions.users.GetUsers{ .id = ids });
+    return .{ .arena = resp.arena, .value = resp.value };
 }
 
-pub fn getChats(ctx: client.Context, ids: []const i64) ![]const types.Chat {
-    const res = try ctx.call(functions.messages.GetChats{ .id = ids });
-    return switch (res) {
+/// Caller owns the result; the returned `chats` slice lives in `resp.arena`, so
+/// free with `resp.deinit()`.
+pub fn getChats(ctx: client.Context, ids: []const i64) !client.Response([]const types.Chat) {
+    const resp = try ctx.call(functions.messages.GetChats{ .id = ids });
+    const chats = switch (resp.value) {
         .MessagesChats => |r| r.chats,
         .MessagesChatsSlice => |r| r.chats,
     };
+    return .{ .arena = resp.arena, .value = chats };
 }
 
-pub fn getChannels(ctx: client.Context, ids: []const types.InputChannel) ![]const types.Chat {
-    const res = try ctx.call(functions.channels.GetChannels{ .id = ids });
-    return switch (res) {
+/// Caller owns the result; free with `resp.deinit()`.
+pub fn getChannels(ctx: client.Context, ids: []const types.InputChannel) !client.Response([]const types.Chat) {
+    const resp = try ctx.call(functions.channels.GetChannels{ .id = ids });
+    const chats = switch (resp.value) {
         .MessagesChats => |r| r.chats,
         .MessagesChatsSlice => |r| r.chats,
     };
+    return .{ .arena = resp.arena, .value = chats };
 }
 
 pub fn Cmd(comptime U: type) type {

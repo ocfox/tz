@@ -30,8 +30,8 @@ const Client = tz.Client(&.{
 fn userAuth(ptr: *anyopaque, io: std.Io) anyerror!void {
     const client: *Client = @ptrCast(@alignCast(ptr));
 
-    // Step 1: request a code
-    _ = try client.call(io, functions.auth.SendCode{
+    // Step 1: request a code (response discarded — use exec)
+    try client.exec(io, functions.auth.SendCode{
         .phone_number = phone,
         .api_id = client.opts.api_id,
         .api_hash = client.opts.api_hash,
@@ -39,7 +39,7 @@ fn userAuth(ptr: *anyopaque, io: std.Io) anyerror!void {
     });
 
     // Step 2: sign in with the received code
-    _ = client.call(io, functions.auth.SignIn{
+    client.exec(io, functions.auth.SignIn{
         .phone_number = phone,
         .phone_code_hash = phone_code_hash,
         .phone_code = .some(code),
@@ -50,7 +50,9 @@ fn userAuth(ptr: *anyopaque, io: std.Io) anyerror!void {
 }
 
 fn signIn2FA(client: *Client, io: std.Io) !void {
-    const pwd = try client.call(io, functions.account.GetPassword{});
+    const pwd_resp = try client.call(io, functions.account.GetPassword{});
+    defer pwd_resp.deinit();
+    const pwd = pwd_resp.value;
 
     const algo = switch (pwd.current_algo.value orelse return error.NoPassword) {
         .PasswordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow => |a| a,
@@ -68,7 +70,7 @@ fn signIn2FA(client: *Client, io: std.Io) !void {
         password_2fa,
     );
 
-    _ = try client.call(io, functions.auth.CheckPassword{
+    try client.exec(io, functions.auth.CheckPassword{
         .password = .{ .InputCheckPasswordSRP = .{
             .srp_id = pwd.srp_id.value orelse return error.NoPassword,
             .A = &answer.A,
@@ -78,7 +80,9 @@ fn signIn2FA(client: *Client, io: std.Io) !void {
 }
 
 pub fn main(init: std.process.Init.Minimal) !void {
-    const allocator = std.heap.smp_allocator;
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var threaded = std.Io.Threaded.init(allocator, .{});
     defer threaded.deinit();

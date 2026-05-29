@@ -27,14 +27,14 @@ pub fn upload(ctx: Context, data: []const u8, opts: UploadOptions) !types.InputF
         const chunk = data[start..end];
 
         if (is_big) {
-            _ = try ctx.callFile(functions.upload.SaveBigFilePart{
+            try ctx.execFile(functions.upload.SaveBigFilePart{
                 .file_id = file_id,
                 .file_part = @intCast(i),
                 .file_total_parts = n_parts,
                 .bytes = chunk,
             });
         } else {
-            _ = try ctx.callFile(functions.upload.SaveFilePart{
+            try ctx.execFile(functions.upload.SaveFilePart{
                 .file_id = file_id,
                 .file_part = @intCast(i),
                 .bytes = chunk,

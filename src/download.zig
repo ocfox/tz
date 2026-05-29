@@ -21,11 +21,11 @@ pub fn download(ctx: Context, location: types.InputFileLocation) ![]u8 {
             .offset = offset,
             .limit = chunk_size,
         });
-        const chunk = switch (result) {
+        defer result.deinit();
+        const chunk = switch (result.value) {
             .UploadFile => |f| f.bytes,
             .UploadFileCdnRedirect => return error.CdnRedirectUnsupported,
         };
-        defer ctx.allocator.free(chunk);
         std.log.debug("download: got {} bytes", .{chunk.len});
         try buf.appendSlice(ctx.allocator, chunk);
         if (chunk.len < @as(usize, @intCast(chunk_size))) break;

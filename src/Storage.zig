@@ -19,23 +19,23 @@ ptr: *anyopaque,
 vtable: *const VTable,
 
 pub const VTable = struct {
-    load: *const fn (*anyopaque, Io, dc_id: u8) anyerror!?SessionData,
-    save: *const fn (*anyopaque, Io, SessionData) anyerror!void,
+    load: *const fn (*anyopaque, Io, std.mem.Allocator, dc_id: u8) anyerror!?SessionData,
+    save: *const fn (*anyopaque, Io, std.mem.Allocator, SessionData) anyerror!void,
     loadUpdateState: *const fn (*anyopaque, Io, std.mem.Allocator) anyerror!?[]u8,
-    saveUpdateState: *const fn (*anyopaque, Io, []const u8) anyerror!void,
+    saveUpdateState: *const fn (*anyopaque, Io, std.mem.Allocator, []const u8) anyerror!void,
 };
 
-pub fn load(self: Storage, io: Io, dc_id: u8) !?SessionData {
-    return self.vtable.load(self.ptr, io, dc_id);
+pub fn load(self: Storage, io: Io, gpa: std.mem.Allocator, dc_id: u8) !?SessionData {
+    return self.vtable.load(self.ptr, io, gpa, dc_id);
 }
-pub fn save(self: Storage, io: Io, data: SessionData) !void {
-    return self.vtable.save(self.ptr, io, data);
+pub fn save(self: Storage, io: Io, gpa: std.mem.Allocator, data: SessionData) !void {
+    return self.vtable.save(self.ptr, io, gpa, data);
 }
 pub fn loadUpdateState(self: Storage, io: Io, gpa: std.mem.Allocator) !?[]u8 {
     return self.vtable.loadUpdateState(self.ptr, io, gpa);
 }
-pub fn saveUpdateState(self: Storage, io: Io, bytes: []const u8) !void {
-    return self.vtable.saveUpdateState(self.ptr, io, bytes);
+pub fn saveUpdateState(self: Storage, io: Io, gpa: std.mem.Allocator, bytes: []const u8) !void {
+    return self.vtable.saveUpdateState(self.ptr, io, gpa, bytes);
 }
 
 const magic: u32 = 0x545A5331; // "TZS1"
@@ -115,10 +115,15 @@ fn writeAll(io: Io, path: []const u8, parsed: Parsed) !void {
 pub const Memory = struct {
     slots: [numSlots]?SessionData = .{null} ** numSlots,
     update_state: ?[]u8 = null,
-    gpa: ?std.mem.Allocator = null,
 
     pub fn storage(self: *Memory) Storage {
         return .{ .ptr = self, .vtable = &vtable };
+    }
+    /// Frees the retained update-state blob. Pass the same allocator used for
+    /// saveUpdateState.
+    pub fn deinit(self: *Memory, gpa: std.mem.Allocator) void {
+        if (self.update_state) |b| gpa.free(b);
+        self.update_state = null;
     }
     const vtable = Storage.VTable{
         .load = Memory.load,
@@ -126,12 +131,12 @@ pub const Memory = struct {
         .loadUpdateState = Memory.loadUpdateState,
         .saveUpdateState = Memory.saveUpdateState,
     };
-    fn load(ptr: *anyopaque, _: Io, dc_id: u8) anyerror!?SessionData {
+    fn load(ptr: *anyopaque, _: Io, _: std.mem.Allocator, dc_id: u8) anyerror!?SessionData {
         const self: *Memory = @ptrCast(@alignCast(ptr));
         if (dc_id < 1 or dc_id > max_dc_id) return null;
         return self.slots[dc_id - 1];
     }
-    fn save(ptr: *anyopaque, _: Io, data: SessionData) anyerror!void {
+    fn save(ptr: *anyopaque, _: Io, _: std.mem.Allocator, data: SessionData) anyerror!void {
         const self: *Memory = @ptrCast(@alignCast(ptr));
         if (data.dc_id < 1 or data.dc_id > max_dc_id) return;
         self.slots[data.dc_id - 1] = data;
@@ -141,11 +146,11 @@ pub const Memory = struct {
         const b = self.update_state orelse return null;
         return try gpa.dupe(u8, b);
     }
-    fn saveUpdateState(ptr: *anyopaque, _: Io, bytes: []const u8) anyerror!void {
+    fn saveUpdateState(ptr: *anyopaque, _: Io, gpa: std.mem.Allocator, bytes: []const u8) anyerror!void {
         const self: *Memory = @ptrCast(@alignCast(ptr));
-        const g = self.gpa orelse std.heap.page_allocator;
-        if (self.update_state) |old| g.free(old);
-        self.update_state = try g.dupe(u8, bytes);
+        const dup = try gpa.dupe(u8, bytes);
+        if (self.update_state) |old| gpa.free(old);
+        self.update_state = dup;
     }
 };
 
@@ -168,24 +173,24 @@ pub const File = struct {
         .saveUpdateState = File.saveUpdateState,
     };
 
-    fn load(ptr: *anyopaque, io: Io, dc_id: u8) anyerror!?SessionData {
+    fn load(ptr: *anyopaque, io: Io, gpa: std.mem.Allocator, dc_id: u8) anyerror!?SessionData {
         const self: *File = @ptrCast(@alignCast(ptr));
         if (dc_id < 1 or dc_id > max_dc_id) return null;
         self.mu.lockUncancelable(io);
         defer self.mu.unlock(io);
-        var parsed = try readAll(io, std.heap.page_allocator, self.path);
-        defer parsed.deinit(std.heap.page_allocator);
+        var parsed = try readAll(io, gpa, self.path);
+        defer parsed.deinit(gpa);
         const sd = parsed.sessions[dc_id - 1] orelse return null;
         if (sd.auth_key_id == 0) return null;
         return sd;
     }
-    fn save(ptr: *anyopaque, io: Io, data: SessionData) anyerror!void {
+    fn save(ptr: *anyopaque, io: Io, gpa: std.mem.Allocator, data: SessionData) anyerror!void {
         const self: *File = @ptrCast(@alignCast(ptr));
         if (data.dc_id < 1 or data.dc_id > max_dc_id) return error.InvalidDcId;
         self.mu.lockUncancelable(io);
         defer self.mu.unlock(io);
-        var parsed = try readAll(io, std.heap.page_allocator, self.path);
-        defer parsed.deinit(std.heap.page_allocator);
+        var parsed = try readAll(io, gpa, self.path);
+        defer parsed.deinit(gpa);
         parsed.sessions[data.dc_id - 1] = data;
         try writeAll(io, self.path, parsed);
     }
@@ -198,31 +203,32 @@ pub const File = struct {
         parsed.update_state = null;
         return blob;
     }
-    fn saveUpdateState(ptr: *anyopaque, io: Io, bytes: []const u8) anyerror!void {
+    fn saveUpdateState(ptr: *anyopaque, io: Io, gpa: std.mem.Allocator, bytes: []const u8) anyerror!void {
         const self: *File = @ptrCast(@alignCast(ptr));
         self.mu.lockUncancelable(io);
         defer self.mu.unlock(io);
-        var parsed = try readAll(io, std.heap.page_allocator, self.path);
-        defer parsed.deinit(std.heap.page_allocator);
-        const dup = try std.heap.page_allocator.dupe(u8, bytes);
-        if (parsed.update_state) |old| std.heap.page_allocator.free(old);
+        var parsed = try readAll(io, gpa, self.path);
+        defer parsed.deinit(gpa);
+        const dup = try gpa.dupe(u8, bytes);
+        if (parsed.update_state) |old| gpa.free(old);
         parsed.update_state = dup;
         try writeAll(io, self.path, parsed);
     }
 };
 
 test "Memory load/save roundtrip" {
+    const gpa = std.testing.allocator;
     var mem = Memory{};
     const s = mem.storage();
-    try std.testing.expect(try s.load(std.Io.failing, 2) == null);
+    try std.testing.expect(try s.load(std.Io.failing, gpa, 2) == null);
     var data: SessionData = undefined;
     @memset(&data.auth_key, 0xab);
     data.auth_key_id = 12345;
     data.server_salt = -99;
     data.dc_id = 2;
     data.is_home = false;
-    try s.save(std.Io.failing, data);
-    const loaded = try s.load(std.Io.failing, 2);
+    try s.save(std.Io.failing, gpa, data);
+    const loaded = try s.load(std.Io.failing, gpa, 2);
     try std.testing.expect(loaded != null);
     try std.testing.expectEqualSlices(u8, &data.auth_key, &loaded.?.auth_key);
     try std.testing.expectEqual(data.auth_key_id, loaded.?.auth_key_id);
@@ -235,14 +241,15 @@ test "File load/save roundtrip" {
     const path = "/tmp/tz_test_session.bin";
     var fs = File.init(path);
     const s = fs.storage();
+    const gpa = std.testing.allocator;
     var data: SessionData = undefined;
     @memset(&data.auth_key, 0xcd);
     data.auth_key_id = 99999;
     data.server_salt = 42;
     data.dc_id = 1;
     data.is_home = false;
-    try s.save(io, data);
-    const loaded = (try s.load(io, 1)).?;
+    try s.save(io, gpa, data);
+    const loaded = (try s.load(io, gpa, 1)).?;
     try std.testing.expectEqualSlices(u8, &data.auth_key, &loaded.auth_key);
     try std.testing.expectEqual(data.dc_id, loaded.dc_id);
     Io.Dir.cwd().deleteFile(io, path) catch {};
@@ -256,6 +263,7 @@ test "File: session + update state unified roundtrip" {
     Io.Dir.cwd().deleteFile(io, path) catch {};
     var fs = File.init(path);
     const s = fs.storage();
+    const gpa = std.testing.allocator;
 
     var data: SessionData = undefined;
     @memset(&data.auth_key, 0x7);
@@ -263,12 +271,12 @@ test "File: session + update state unified roundtrip" {
     data.server_salt = 9;
     data.dc_id = 2;
     data.is_home = true;
-    try s.save(io, data);
+    try s.save(io, gpa, data);
 
     const blob = [_]u8{ 1, 2, 3, 4, 5 };
-    try s.saveUpdateState(io, &blob);
+    try s.saveUpdateState(io, gpa, &blob);
 
-    const loaded = (try s.load(io, 2)).?;
+    const loaded = (try s.load(io, gpa, 2)).?;
     try std.testing.expectEqual(@as(i64, 555), loaded.auth_key_id);
     try std.testing.expect(loaded.is_home);
 
@@ -282,14 +290,14 @@ test "Memory: update state roundtrip" {
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
+    const gpa = std.testing.allocator;
     var mem = Memory{};
-    mem.gpa = std.testing.allocator;
+    defer mem.deinit(gpa);
     const s = mem.storage();
-    try std.testing.expect((try s.loadUpdateState(io, std.testing.allocator)) == null);
+    try std.testing.expect((try s.loadUpdateState(io, gpa)) == null);
     const blob = [_]u8{ 9, 8, 7 };
-    try s.saveUpdateState(io, &blob);
-    const got = (try s.loadUpdateState(io, std.testing.allocator)).?;
-    defer std.testing.allocator.free(got);
+    try s.saveUpdateState(io, gpa, &blob);
+    const got = (try s.loadUpdateState(io, gpa)).?;
+    defer gpa.free(got);
     try std.testing.expectEqualSlices(u8, &blob, got);
-    if (mem.update_state) |b| std.testing.allocator.free(b);
 }

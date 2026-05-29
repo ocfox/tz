@@ -31,12 +31,17 @@ defer client.deinit();
 try client.run(io);
 ```
 
-call any tl function directly:
+call any tl function directly. `call` returns a `Response(T)` that owns the decoded
+value and all its nested allocations — free the whole tree with `deinit()`. Use
+`exec` instead when you don't need the response (it allocates nothing for the reply):
 
 ```zig
 var id_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
-const users = try ctx.call(f.users.GetUsers{ .id = &id_input });
-defer ctx.allocator.free(users);
+const resp = try ctx.call(f.users.GetUsers{ .id = &id_input });
+defer resp.deinit();
+const users = resp.value;
+
+try ctx.exec(f.messages.SendMessage{ .peer = peer, .message = "hi" });
 ```
 
 helpers:

@@ -25,10 +25,10 @@ fn onCommand(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
 
     if (std.mem.eql(u8, msg.message, "/whoami")) {
         var id_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
-        const users = try ctx.call(f.users.GetUsers{ .id = &id_input });
-        defer ctx.allocator.free(users);
+        const users_resp = try ctx.call(f.users.GetUsers{ .id = &id_input });
+        defer users_resp.deinit();
 
-        const user = switch (users[0]) {
+        const user = switch (users_resp.value[0]) {
             .User => |u| u,
             else => return,
         };
@@ -38,13 +38,13 @@ fn onCommand(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
             user.id,
             user.first_name.value orelse "(none)",
         });
-        _ = try ctx.call(f.messages.SendMessage{
+        try ctx.exec(f.messages.SendMessage{
             .peer = peer,
             .message = text,
         });
     } else if (std.mem.eql(u8, msg.message, "/delete")) {
         var ids = [_]i32{msg.id};
-        _ = try ctx.call(f.messages.DeleteMessages{
+        try ctx.exec(f.messages.DeleteMessages{
             .id = &ids,
         });
     }
@@ -58,7 +58,7 @@ fn onEcho(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
     if (msg.message.len == 0 or msg.message[0] == '/') return;
 
     const peer = tz.helpers.peerFromMessage(ctx.entities, msg) orelse return;
-    _ = try ctx.call(f.messages.SendMessage{
+    try ctx.exec(f.messages.SendMessage{
         .peer = peer,
         .message = msg.message,
         .reply_to = .some(.{ .InputReplyToMessage = .{
@@ -73,13 +73,15 @@ const handlers = &.{
 };
 
 pub fn main(init: std.process.Init.Minimal) !void {
-    const allocator = std.heap.smp_allocator;
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var threaded = std.Io.Threaded.init(allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
-    var file_storage = tz.storage.FileStorage.init("any_call.session");
+    var file_storage = tz.Storage.File.init("any_call.session");
 
     const client = try tz.Client(handlers).init(allocator, .{
         .api_id = try std.fmt.parseInt(i32, init.environ.getPosix("TZ_API_ID") orelse usage(), 10),

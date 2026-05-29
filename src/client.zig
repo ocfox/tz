@@ -13,6 +13,33 @@ pub const HandlerEntry = struct {
     dispatch: *const fn (ctx: Context, update: types.Update) anyerror!void,
 };
 
+/// Owned decode result: `value` and all of its nested allocations live in `arena`.
+/// Free the whole tree at once with `deinit()` — there is no per-field freeing and
+/// no way to under/over-free. Mirrors the ownership model of `std.json.Parsed(T)`.
+pub fn Response(comptime T: type) type {
+    return struct {
+        arena: *std.heap.ArenaAllocator,
+        value: T,
+
+        pub fn deinit(self: @This()) void {
+            const gpa = self.arena.child_allocator;
+            self.arena.deinit();
+            gpa.destroy(self.arena);
+        }
+    };
+}
+
+/// Decode `raw` into a freshly-allocated arena and hand back an owning `Response(T)`.
+fn decodeOwned(comptime T: type, raw: []const u8, gpa: Allocator) !Response(T) {
+    const arena = try gpa.create(std.heap.ArenaAllocator);
+    errdefer gpa.destroy(arena);
+    arena.* = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+    var r: std.Io.Reader = .fixed(raw);
+    const value = try codec.decode(T, &r, arena.allocator());
+    return .{ .arena = arena, .value = value };
+}
+
 var subConnDummy: u8 = 0;
 const sub_conn_noop_handler = Connector.UpdateHandler{
     .ptr = &subConnDummy,
@@ -55,14 +82,15 @@ pub const Context = struct {
     /// Like callFn but routes FILE_MIGRATE to a sub-connection automatically.
     callFileFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
 
-    /// Send a typed TL request, return the decoded response.
-    pub fn call(self: Context, request: anytype) !@TypeOf(request).Response {
+    /// Send a typed TL request, return the decoded response. The caller owns the
+    /// result and must free it with `resp.deinit()`. If you don't need the
+    /// response, use `exec` instead — it allocates nothing for the reply.
+    pub fn call(self: Context, request: anytype) !Response(@TypeOf(request).Response) {
         const bytes = try codec.encodeAlloc(request, self.allocator);
         defer self.allocator.free(bytes);
         const raw = try self.callFn(self.client, self.io, bytes);
         defer self.allocator.free(raw);
-        var r: std.Io.Reader = .fixed(raw);
-        return codec.decode(@TypeOf(request).Response, &r, self.allocator);
+        return decodeOwned(@TypeOf(request).Response, raw, self.allocator);
     }
 
     /// Send a typed TL request, discard the response.
@@ -73,15 +101,23 @@ pub const Context = struct {
         self.allocator.free(raw);
     }
 
-    /// Like call but for upload RPCs: automatically follows FILE_MIGRATE to the file DC.
-    /// Uses heap allocation for encoding (upload parts can be large).
-    pub fn callFile(self: Context, request: anytype) !@TypeOf(request).Response {
+    /// Like call but for upload/download RPCs: automatically follows FILE_MIGRATE to
+    /// the file DC. Uses heap allocation for encoding (upload parts can be large).
+    /// The caller owns the result and must free it with `resp.deinit()`.
+    pub fn callFile(self: Context, request: anytype) !Response(@TypeOf(request).Response) {
         const bytes = try codec.encodeAlloc(request, self.allocator);
         defer self.allocator.free(bytes);
         const raw = try self.callFileFn(self.client, self.io, bytes);
         defer self.allocator.free(raw);
-        var r: std.Io.Reader = .fixed(raw);
-        return codec.decode(@TypeOf(request).Response, &r, self.allocator);
+        return decodeOwned(@TypeOf(request).Response, raw, self.allocator);
+    }
+
+    /// Like callFile but discards the response (e.g. SaveFilePart returns only Bool).
+    pub fn execFile(self: Context, request: anytype) !void {
+        const bytes = try codec.encodeAlloc(request, self.allocator);
+        defer self.allocator.free(bytes);
+        const raw = try self.callFileFn(self.client, self.io, bytes);
+        self.allocator.free(raw);
     }
 
     /// Resolve a known peer's InputPeer (observed during this session).
@@ -173,7 +209,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                         const dc_id = if (self.primary) |p| p.dc_id else 0;
                         var blank = std.mem.zeroes(Storage.SessionData);
                         blank.dc_id = dc_id;
-                        self.opts.storage.save(io, blank) catch |e|
+                        self.opts.storage.save(io, self.allocator, blank) catch |e|
                             std.log.warn("failed to clear session: {}", .{e});
                         self.user_authorized = false;
                     }
@@ -195,8 +231,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             if (self.primary) |c| c.close(io);
         }
 
-        /// Send a typed TL request, return the decoded response.
-        pub fn call(self: *Self, io: Io, request: anytype) !@TypeOf(request).Response {
+        /// Send a typed TL request, return the decoded response. The caller owns the
+        /// result and must free it with `resp.deinit()`; use `exec` to discard it.
+        pub fn call(self: *Self, io: Io, request: anytype) !Response(@TypeOf(request).Response) {
             const bytes = try codec.encodeAlloc(request, self.allocator);
             defer self.allocator.free(bytes);
             const raw = try self.callRaw(io, bytes);
@@ -205,11 +242,11 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 try self.handleRpcError(io, raw);
                 return error.RpcError;
             }
-            var r: std.Io.Reader = .fixed(raw);
-            return codec.decode(@TypeOf(request).Response, &r, self.allocator);
+            return decodeOwned(@TypeOf(request).Response, raw, self.allocator);
         }
 
-        fn exec(self: *Self, io: Io, request: anytype) !void {
+        /// Send a typed TL request, discard the response.
+        pub fn exec(self: *Self, io: Io, request: anytype) !void {
             const bytes = try codec.encodeAlloc(request, self.allocator);
             defer self.allocator.free(bytes);
             const raw = try self.callRaw(io, bytes);
@@ -329,10 +366,11 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         }
 
         fn transferAuth(self: *Self, io2: Io, sub: *Connector, dc_id: u8) !void {
-            const exported = try self.call(io2, functions.auth.ExportAuthorization{
+            const exported_resp = try self.call(io2, functions.auth.ExportAuthorization{
                 .dc_id = @intCast(dc_id),
             });
-            defer codec.free(@TypeOf(exported), exported, self.allocator);
+            defer exported_resp.deinit();
+            const exported = exported_resp.value;
             var buf: [512]u8 = undefined;
             var w: std.Io.Writer = .fixed(&buf);
             try codec.encode(functions.auth.ImportAuthorization{
@@ -355,7 +393,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         fn runOnce(self: *Self, io: Io) !void {
             if (!self.dc_resolved) {
                 scan: for (1..Storage.max_dc_id + 1) |id| {
-                    const slot = try self.opts.storage.load(io, @intCast(id)) orelse continue;
+                    const slot = try self.opts.storage.load(io, self.allocator, @intCast(id)) orelse continue;
                     if (slot.is_home) {
                         if (Connector.findDc(slot.dc_id, self.opts.dc.test_server)) |dc| self.opts.dc = dc;
                         break :scan;
@@ -439,8 +477,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         }
 
         fn fetchDcList(self: *Self, io: Io) !void {
-            const config = try self.call(io, functions.help.GetConfig{});
-            defer codec.free(@TypeOf(config), config, self.allocator);
+            const config_resp = try self.call(io, functions.help.GetConfig{});
+            defer config_resp.deinit();
+            const config = config_resp.value;
             var list: std.ArrayList(Connector.DC) = .empty;
             defer list.deinit(self.allocator);
             for (config.dc_options) |opt| {
@@ -487,8 +526,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 break :blk self.message_box.pts == 0;
             };
             if (need_state) {
-                const st = try self.call(io, functions.updates.GetState{});
-                defer codec.free(@TypeOf(st), st, self.allocator);
+                const st_resp = try self.call(io, functions.updates.GetState{});
+                defer st_resp.deinit();
+                const st = st_resp.value;
                 self.mb_mutex.lockUncancelable(io);
                 self.message_box.setState(st);
                 self.mb_mutex.unlock(io);
@@ -534,8 +574,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         fn fetchCommonDiff(self: *Self, io: Io, gd: functions.updates.GetDifference) !void {
             ulog.info("GetDifference pts={} qts={} date={}", .{ gd.pts, gd.qts, gd.date });
-            const diff = try self.call(io, gd);
-            defer codec.free(@TypeOf(diff), diff, self.allocator);
+            const diff_resp = try self.call(io, gd);
+            defer diff_resp.deinit();
+            const diff = diff_resp.value;
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
             const applied = blk: {
@@ -566,8 +607,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 }
             }
             ulog.info("GetChannelDifference channel={} pts={}", .{ id, req.pts });
-            const diff = try self.call(io, req);
-            defer codec.free(@TypeOf(diff), diff, self.allocator);
+            const diff_resp = try self.call(io, req);
+            defer diff_resp.deinit();
+            const diff = diff_resp.value;
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
             const applied = blk: {
@@ -595,18 +637,19 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                     return;
                 };
             }
-            self.opts.storage.saveUpdateState(io, aw.written()) catch |e|
+            self.opts.storage.saveUpdateState(io, self.allocator, aw.written()) catch |e|
                 std.log.debug("saveUpdateState: {}", .{e});
         }
 
         fn authBot(self: *Self, io: Io, token: []const u8) !void {
-            const auth = try self.call(io, functions.auth.ImportBotAuthorization{
+            const auth_resp = try self.call(io, functions.auth.ImportBotAuthorization{
                 .flags = 0,
                 .api_id = self.opts.api_id,
                 .api_hash = self.opts.api_hash,
                 .bot_auth_token = token,
             });
-            defer codec.free(@TypeOf(auth), auth, self.allocator);
+            defer auth_resp.deinit();
+            const auth = auth_resp.value;
             switch (auth) {
                 .AuthAuthorization => |a| switch (a.user) {
                     .User => |u| self.bot_id = u.id,

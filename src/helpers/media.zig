@@ -208,6 +208,14 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
     const attrs_buf = try ctx.allocator.alloc(types.DocumentAttribute, items.len);
     defer ctx.allocator.free(attrs_buf);
 
+    // Each staged response owns the file_reference bytes referenced by media_items,
+    // so the responses must outlive the SendMultiMedia call below.
+    const Staged = client.Response(functions.messages.UploadMedia.Response);
+    const staged_responses = try ctx.allocator.alloc(Staged, items.len);
+    defer ctx.allocator.free(staged_responses);
+    var staged_count: usize = 0;
+    defer for (staged_responses[0..staged_count]) |s| s.deinit();
+
     for (items, 0..) |item, i| {
         const input_file = try upload_file.upload(ctx, item.data, .{ .name = item.name });
         if (input_file == .InputFile) checksums[i] = input_file.InputFile.md5_checksum;
@@ -224,7 +232,9 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
         };
         // SendMultiMedia rejects InputMediaUploaded* directly — must stage via
         // uploadMedia first, then reference the server-assigned id.
-        const staged = try ctx.call(functions.messages.UploadMedia{ .peer = peer, .media = uploaded });
+        staged_responses[staged_count] = try ctx.call(functions.messages.UploadMedia{ .peer = peer, .media = uploaded });
+        const staged = staged_responses[staged_count].value;
+        staged_count += 1;
         const media: types.InputMedia = switch (staged) {
             .MessageMediaPhoto => |m| blk: {
                 const p = switch (m.photo.value orelse return error.NoPhoto) {

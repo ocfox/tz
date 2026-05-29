@@ -20,7 +20,9 @@ const handlers = &.{
 };
 
 pub fn main(init: std.process.Init.Minimal) !void {
-    const allocator = std.heap.smp_allocator;
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     // std.Io.Threaded gives us an IO runtime backed by a thread pool.
     // All network IO and timers go through this.
