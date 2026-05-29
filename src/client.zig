@@ -429,6 +429,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 self.sub_conns.clearRetainingCapacity();
             }
             self.primary = c;
+            // is_home is only set after a successful auth and is persisted, so a loaded
+            // home-DC session means we're already authorized — skip auth_fn re-runs.
+            if (c.is_home) self.user_authorized = true;
 
             const update_handler: Connector.UpdateHandler = .{
                 .ptr = self,

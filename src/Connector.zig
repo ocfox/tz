@@ -93,10 +93,12 @@ pub fn connect(io: Io, allocator: Allocator, opts: Options) !*Connector {
     const stream = try opts.dc.addr.connect(io, .{ .mode = .stream });
     var conn = Transport.init(stream, opts.transport);
 
+    var loaded_is_home = false;
     const auth_key_result = blk: {
         if (try opts.storage.load(io, allocator, opts.dc.id)) |saved| {
             if (saved.dc_id != 0 and saved.dc_id == opts.dc.id) {
                 std.log.info("loaded existing session (dc={})", .{saved.dc_id});
+                loaded_is_home = saved.is_home;
                 break :blk auth_key.Result{
                     .auth_key = saved.auth_key,
                     .auth_key_id = saved.auth_key_id,
@@ -139,6 +141,7 @@ pub fn connect(io: Io, allocator: Allocator, opts: Options) !*Connector {
         .api_hash = opts.api_hash,
         .storage = opts.storage,
         .dc_id = opts.dc.id,
+        .is_home = loaded_is_home,
     };
     self.mtp = try MtpImpl.init(allocator, conn, mtp_session, &self.mtp_handler);
     return self;
