@@ -9,6 +9,7 @@ pub const Client = client.Client;
 pub const ClientOptions = client.ClientOptions;
 pub const Context = client.Context;
 pub const Response = client.Response;
+pub const RpcError = @import("RpcError.zig");
 pub const handler = client.handler;
 
 pub const Storage = @import("Storage.zig");
@@ -31,4 +32,5 @@ test {
     _ = @import("crypto/aes_ige.zig");
     _ = @import("mtproto/Session.zig");
     _ = @import("State.zig");
+    _ = @import("RpcError.zig");
 }

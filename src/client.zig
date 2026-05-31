@@ -6,7 +6,13 @@ const Storage = @import("Storage.zig");
 const codec = @import("codec");
 const types = @import("types");
 const functions = @import("functions");
+const RpcError = @import("RpcError.zig");
 const ulog = std.log.scoped(.updates);
+
+/// True if `raw` is a serialized `rpc_error` rather than a normal response body.
+fn isRpcError(raw: []const u8) bool {
+    return raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid;
+}
 
 pub const HandlerEntry = struct {
     cid: u32,
@@ -85,8 +91,10 @@ pub const Context = struct {
     callFileFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
 
     /// Send a typed TL request, return the decoded response. The caller owns the
-    /// result and must free it with `resp.deinit()`. If you don't need the
-    /// response, use `exec` instead — it allocates nothing for the reply.
+    /// result and must free it with `resp.deinit()`. If you don't need the response,
+    /// use `exec` instead. FLOOD_WAIT and transient server faults are retried
+    /// transparently; other server errors surface as Zig errors (`error.RpcError`,
+    /// or a named one like `error.PhoneCodeInvalid` — see `handleRpcError`).
     pub fn call(self: Context, request: anytype) !Response(@TypeOf(request).Response) {
         const bytes = try codec.encodeAlloc(request, self.allocator);
         defer self.allocator.free(bytes);
@@ -160,6 +168,11 @@ pub const ClientOptions = struct {
     api_id: i32,
     api_hash: []const u8,
     storage: Storage,
+    /// Maximum attempts for a single RPC before a transient error (FLOOD_WAIT,
+    /// 500 internal, -503 timeout) is given up on and surfaced. Each retry may sleep
+    /// — FLOOD_WAIT waits the server-requested seconds — so this bounds the attempt
+    /// count, not wall-clock time.
+    max_rpc_retries: u32 = 5,
 };
 
 /// Client(handlers) — handlers is a comptime-known slice of HandlerEntry.
@@ -235,59 +248,73 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         /// Send a typed TL request, return the decoded response. The caller owns the
         /// result and must free it with `resp.deinit()`; use `exec` to discard it.
+        /// Used on the internal sync/auth path: RPC errors surface as Zig errors
+        /// (`error.DcMigrate`, `error.SessionInvalid`, …) for the run loop to act on.
         pub fn call(self: *Self, io: Io, request: anytype) !Response(@TypeOf(request).Response) {
             const bytes = try codec.encodeAlloc(request, self.allocator);
             defer self.allocator.free(bytes);
-            const raw = try self.callRaw(io, bytes);
-            defer self.allocator.free(raw);
-            if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid) {
-                try self.handleRpcError(io, raw);
-                return error.RpcError;
+            var attempt: u32 = 0;
+            while (true) : (attempt += 1) {
+                const raw = try self.callRaw(io, bytes);
+                if (!isRpcError(raw)) {
+                    defer self.allocator.free(raw);
+                    return decodeOwned(@TypeOf(request).Response, raw, self.allocator);
+                }
+                const r = self.handleRpcError(io, raw, attempt + 1 < self.opts.max_rpc_retries);
+                self.allocator.free(raw);
+                try r; // void => retryable (already slept); error => surface
             }
-            return decodeOwned(@TypeOf(request).Response, raw, self.allocator);
         }
 
         /// Send a typed TL request, discard the response.
         pub fn exec(self: *Self, io: Io, request: anytype) !void {
             const bytes = try codec.encodeAlloc(request, self.allocator);
             defer self.allocator.free(bytes);
-            const raw = try self.callRaw(io, bytes);
-            defer self.allocator.free(raw);
-            if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid)
-                return self.handleRpcError(io, raw);
+            var attempt: u32 = 0;
+            while (true) : (attempt += 1) {
+                const raw = try self.callRaw(io, bytes);
+                if (!isRpcError(raw)) {
+                    self.allocator.free(raw);
+                    return;
+                }
+                const r = self.handleRpcError(io, raw, attempt + 1 < self.opts.max_rpc_retries);
+                self.allocator.free(raw);
+                try r;
+            }
         }
 
+        /// Retry engine behind `Context.call`/`exec` (handler/auth path). Returns the
+        /// owned response body, or maps the `rpc_error` to a Zig error via
+        /// `handleRpcError` (which also auto-retries FLOOD_WAIT and transient faults).
         fn callImpl(ptr: *anyopaque, io2: Io, bytes: []const u8) anyerror![]u8 {
             const self: *Self = @ptrCast(@alignCast(ptr));
-            for (0..4) |_| {
+            var attempt: u32 = 0;
+            while (true) : (attempt += 1) {
                 const raw = try self.callRaw(io2, bytes);
-                if (raw.len < 4 or std.mem.readInt(u32, raw[0..4], .little) != types.RpcError.cid)
-                    return raw;
-                defer self.allocator.free(raw);
-                // handleRpcError returns void on FLOOD_WAIT (slept, should retry), error otherwise.
-                try self.handleRpcError(io2, raw);
+                if (!isRpcError(raw)) return raw;
+                const r = self.handleRpcError(io2, raw, attempt + 1 < self.opts.max_rpc_retries);
+                self.allocator.free(raw);
+                try r; // void => retryable (already slept); error => surface
             }
-            return error.RpcError;
         }
 
+        /// Like `callImpl` but for file RPCs: FILE_MIGRATE routes to a sub-connection
+        /// on the file DC instead of tearing down the primary.
         fn callFileImpl(ptr: *anyopaque, io2: Io, bytes: []const u8) anyerror![]u8 {
             const self: *Self = @ptrCast(@alignCast(ptr));
-            for (0..4) |_| {
+            var attempt: u32 = 0;
+            while (true) : (attempt += 1) {
                 const raw = try self.callRaw(io2, bytes);
-                if (raw.len < 4 or std.mem.readInt(u32, raw[0..4], .little) != types.RpcError.cid)
-                    return raw;
-                const code = std.mem.readInt(i32, raw[4..8], .little);
-                if (code == 303) {
-                    if (parseMigrateDc(raw)) |dc_id| {
-                        std.log.debug("file: FILE_MIGRATE to DC {}", .{dc_id});
-                        self.allocator.free(raw);
-                        return self.callRawOnDc(io2, dc_id, bytes);
-                    }
+                if (!isRpcError(raw)) return raw;
+                if (RpcError.parse(raw).migrateDc()) |dc_id| {
+                    std.log.debug("file: FILE_MIGRATE to DC {}", .{dc_id});
+                    self.allocator.free(raw);
+                    return self.callRawOnDc(io2, dc_id, bytes);
                 }
-                defer self.allocator.free(raw);
-                try self.handleRpcError(io2, raw);
+                const r = self.handleRpcError(io2, raw, attempt + 1 < self.opts.max_rpc_retries);
+                self.allocator.free(raw);
+                try r;
             }
-            return error.RpcError;
         }
 
         fn callViaConnector(self: *Self, io2: Io, c: *Connector, bytes: []const u8) ![]u8 {
@@ -381,8 +408,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             }, &w);
             const raw = try self.callViaConnector(io2, sub, w.buffered());
             defer self.allocator.free(raw);
-            if (raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid)
-                return error.AuthTransferFailed;
+            if (isRpcError(raw)) return error.AuthTransferFailed;
         }
 
         fn markHomeDc(self: *Self, io: Io) void {
@@ -697,37 +723,32 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             return self.callViaConnector(io, self.primary orelse return error.NotConnected, bytes);
         }
 
-        fn handleRpcError(self: *Self, io: Io, raw: []const u8) !void {
-            if (raw.len < 8) return error.RpcError;
-            const code = std.mem.readInt(i32, raw[4..8], .little);
-            const slen: usize = if (raw.len > 8 and raw[8] < 254) raw[8] else 0;
-            const msg = if (9 + slen <= raw.len) raw[9 .. 9 + slen] else &[_]u8{};
-            std.log.err("rpc_error: code={} msg={s}", .{ code, msg });
-            if (code == 420) {
-                if (std.mem.indexOf(u8, msg, "FLOOD_WAIT_")) |idx| {
-                    const secs = std.fmt.parseInt(u64, msg[idx + "FLOOD_WAIT_".len ..], 10) catch 60;
-                    std.log.warn("flood wait: sleeping {}s", .{secs});
-                    std.Io.sleep(io, std.Io.Duration.fromSeconds(@intCast(secs)), .awake) catch |err| std.log.debug("sleep: {}", .{err});
-                    return; // caller should retry
-                }
+        /// Classify an `rpc_error` for the internal sync/auth path. Returns void when
+        /// the error is auto-retryable and `can_retry` is true (sleeping first, e.g.
+        /// for FLOOD_WAIT); otherwise maps to the Zig error the run loop expects.
+        fn handleRpcError(self: *Self, io: Io, raw: []const u8, can_retry: bool) !void {
+            const e = RpcError.parse(raw);
+            e.log();
+            if (e.migrateDc()) |dc_id| {
+                self.opts.dc = self.findDc(dc_id) orelse return error.RpcError;
+                return error.DcMigrate;
             }
-            if (code == 303) {
-                if (parseMigrateDc(raw)) |dc_id| {
-                    self.opts.dc = self.findDc(dc_id) orelse return error.RpcError;
-                    return error.DcMigrate;
-                }
+            if (e.autoRetryDelayMs()) |ms| {
+                if (!can_retry) return error.RpcError;
+                if (ms > 0) std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(ms)), .awake) catch |err| std.log.debug("sleep: {}", .{err});
+                return; // retry
             }
             // SESSION_PASSWORD_NEEDED is a 401 but means "needs 2FA", not a dead
-            // session — match it before the blanket 401 check below.
-            if (std.mem.eql(u8, msg, "SESSION_PASSWORD_NEEDED")) return error.SessionPasswordNeeded;
-            if (code == 401) return error.SessionInvalid;
+            // session — isUnauthorized() already excludes it.
+            if (e.isSessionPasswordNeeded()) return error.SessionPasswordNeeded;
+            if (e.isUnauthorized()) return error.SessionInvalid;
             // Retryable user-input errors: surface them distinctly so callers can
             // re-prompt in place instead of tearing down the connection.
-            if (std.mem.eql(u8, msg, "PHONE_CODE_INVALID")) return error.PhoneCodeInvalid;
-            if (std.mem.eql(u8, msg, "PASSWORD_HASH_INVALID")) return error.PasswordHashInvalid;
+            if (e.isPhoneCodeInvalid()) return error.PhoneCodeInvalid;
+            if (e.isPasswordHashInvalid()) return error.PasswordHashInvalid;
             // Channel we can't access: permanent, so the diff loop must drop it
             // rather than retry forever.
-            if (std.mem.eql(u8, msg, "CHANNEL_INVALID")) return error.ChannelInvalid;
+            if (e.isChannelInvalid()) return error.ChannelInvalid;
             return error.RpcError;
         }
 
@@ -978,13 +999,4 @@ fn wrapInit(allocator: Allocator, api_id: i32, query_bytes: []const u8) ![]u8 {
     @memcpy(out[0..h.len], h);
     @memcpy(out[h.len..], query_bytes);
     return out;
-}
-
-fn parseMigrateDc(raw: []const u8) ?u8 {
-    if (raw.len < 9) return null;
-    const slen = raw[8];
-    if (slen >= 254 or 9 + @as(usize, slen) > raw.len) return null;
-    const msg = raw[9 .. 9 + slen];
-    const idx = std.mem.indexOf(u8, msg, "_MIGRATE_") orelse return null;
-    return std.fmt.parseInt(u8, msg[idx + "_MIGRATE_".len ..], 10) catch null;
 }
