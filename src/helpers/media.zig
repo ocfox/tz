@@ -3,8 +3,7 @@ const types = @import("types");
 const functions = @import("functions");
 const client = @import("../client.zig");
 const File = @import("../File.zig");
-
-const Context = client.Context;
+const Msg = @import("../Msg.zig");
 
 pub const SendMediaOptions = struct {
     caption: []const u8 = "",
@@ -51,32 +50,14 @@ pub const AlbumOptions = struct {
     reply_to: ?i32 = null,
 };
 
-fn peerFromMessage(entities: client.Entities, msg: types.Message_) ?types.InputPeer {
-    return switch (msg.peer_id) {
-        .PeerUser => |p| .{ .InputPeerUser = .{
-            .user_id = p.user_id,
-            .access_hash = entities.accessHash(p.user_id) orelse return null,
-        } },
-        .PeerChat => |p| .{ .InputPeerChat = .{ .chat_id = p.chat_id } },
-        .PeerChannel => |p| .{ .InputPeerChannel = .{
-            .channel_id = p.channel_id,
-            .access_hash = entities.channelAccessHash(p.channel_id) orelse return null,
-        } },
-    };
-}
-
-pub fn sendPhoto(ctx: Context, update: types.UpdateNewMessage, data: []const u8, opts: SendMediaOptions) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    const input_file = try File.upload(ctx, data, "photo.jpg");
+pub fn sendPhoto(msg: Msg, data: []const u8, opts: SendMediaOptions) !void {
+    const peer = msg.peer() orelse return;
+    const input_file = try File.upload(msg.ctx, data, "photo.jpg");
     defer switch (input_file) {
-        .InputFile => |f| ctx.allocator.free(f.md5_checksum),
+        .InputFile => |f| msg.ctx.allocator.free(f.md5_checksum),
         .InputFileBig, .InputFileStoryDocument => {},
     };
-    try ctx.exec(functions.messages.SendMedia{
+    try msg.ctx.exec(functions.messages.SendMedia{
         .peer = peer,
         .media = .{ .InputMediaUploadedPhoto = .{ .file = input_file } },
         .message = opts.caption,
@@ -84,19 +65,15 @@ pub fn sendPhoto(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
     });
 }
 
-pub fn sendDocument(ctx: Context, update: types.UpdateNewMessage, data: []const u8, mime_type: []const u8, opts: SendMediaOptions) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    const input_file = try File.upload(ctx, data, "file");
+pub fn sendDocument(msg: Msg, data: []const u8, mime_type: []const u8, opts: SendMediaOptions) !void {
+    const peer = msg.peer() orelse return;
+    const input_file = try File.upload(msg.ctx, data, "file");
     defer switch (input_file) {
-        .InputFile => |f| ctx.allocator.free(f.md5_checksum),
+        .InputFile => |f| msg.ctx.allocator.free(f.md5_checksum),
         .InputFileBig, .InputFileStoryDocument => {},
     };
     var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeFilename = .{ .file_name = "file" } }};
-    try ctx.exec(functions.messages.SendMedia{
+    try msg.ctx.exec(functions.messages.SendMedia{
         .peer = peer,
         .media = .{ .InputMediaUploadedDocument = .{
             .file = input_file,
@@ -108,15 +85,11 @@ pub fn sendDocument(ctx: Context, update: types.UpdateNewMessage, data: []const 
     });
 }
 
-pub fn sendAudio(ctx: Context, update: types.UpdateNewMessage, data: []const u8, mime_type: []const u8, opts: AudioOptions) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    const input_file = try File.upload(ctx, data, opts.name);
+pub fn sendAudio(msg: Msg, data: []const u8, mime_type: []const u8, opts: AudioOptions) !void {
+    const peer = msg.peer() orelse return;
+    const input_file = try File.upload(msg.ctx, data, opts.name);
     defer switch (input_file) {
-        .InputFile => |f| ctx.allocator.free(f.md5_checksum),
+        .InputFile => |f| msg.ctx.allocator.free(f.md5_checksum),
         .InputFileBig, .InputFileStoryDocument => {},
     };
     var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeAudio = .{
@@ -124,7 +97,7 @@ pub fn sendAudio(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         .title = if (opts.title) |t| .some(t) else .none,
         .performer = if (opts.performer) |p| .some(p) else .none,
     } }};
-    try ctx.exec(functions.messages.SendMedia{
+    try msg.ctx.exec(functions.messages.SendMedia{
         .peer = peer,
         .media = .{ .InputMediaUploadedDocument = .{
             .file = input_file,
@@ -136,15 +109,11 @@ pub fn sendAudio(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
     });
 }
 
-pub fn sendVideo(ctx: Context, update: types.UpdateNewMessage, data: []const u8, mime_type: []const u8, opts: VideoOptions) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    const input_file = try File.upload(ctx, data, opts.name);
+pub fn sendVideo(msg: Msg, data: []const u8, mime_type: []const u8, opts: VideoOptions) !void {
+    const peer = msg.peer() orelse return;
+    const input_file = try File.upload(msg.ctx, data, opts.name);
     defer switch (input_file) {
-        .InputFile => |f| ctx.allocator.free(f.md5_checksum),
+        .InputFile => |f| msg.ctx.allocator.free(f.md5_checksum),
         .InputFileBig, .InputFileStoryDocument => {},
     };
     var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeVideo = .{
@@ -153,7 +122,7 @@ pub fn sendVideo(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
         .w = opts.w,
         .h = opts.h,
     } }};
-    try ctx.exec(functions.messages.SendMedia{
+    try msg.ctx.exec(functions.messages.SendMedia{
         .peer = peer,
         .media = .{ .InputMediaUploadedDocument = .{
             .file = input_file,
@@ -165,22 +134,18 @@ pub fn sendVideo(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
     });
 }
 
-pub fn sendVoice(ctx: Context, update: types.UpdateNewMessage, data: []const u8, opts: VoiceOptions) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    const input_file = try File.upload(ctx, data, opts.name);
+pub fn sendVoice(msg: Msg, data: []const u8, opts: VoiceOptions) !void {
+    const peer = msg.peer() orelse return;
+    const input_file = try File.upload(msg.ctx, data, opts.name);
     defer switch (input_file) {
-        .InputFile => |f| ctx.allocator.free(f.md5_checksum),
+        .InputFile => |f| msg.ctx.allocator.free(f.md5_checksum),
         .InputFileBig, .InputFileStoryDocument => {},
     };
     var attrs = [_]types.DocumentAttribute{.{ .DocumentAttributeAudio = .{
         .voice = .some({}),
         .duration = opts.duration,
     } }};
-    try ctx.exec(functions.messages.SendMedia{
+    try msg.ctx.exec(functions.messages.SendMedia{
         .peer = peer,
         .media = .{ .InputMediaUploadedDocument = .{
             .file = input_file,
@@ -192,32 +157,29 @@ pub fn sendVoice(ctx: Context, update: types.UpdateNewMessage, data: []const u8,
     });
 }
 
-pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const AlbumItem, opts: AlbumOptions) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    const peer = peerFromMessage(ctx.entities, msg) orelse return;
+pub fn sendAlbum(msg: Msg, items: []const AlbumItem, opts: AlbumOptions) !void {
+    const peer = msg.peer() orelse return;
+    const allocator = msg.ctx.allocator;
 
-    const media_items = try ctx.allocator.alloc(types.InputSingleMedia, items.len);
-    defer ctx.allocator.free(media_items);
-    const checksums = try ctx.allocator.alloc(?[]const u8, items.len);
-    defer ctx.allocator.free(checksums);
-    defer for (checksums) |c| if (c) |s| ctx.allocator.free(s);
+    const media_items = try allocator.alloc(types.InputSingleMedia, items.len);
+    defer allocator.free(media_items);
+    const checksums = try allocator.alloc(?[]const u8, items.len);
+    defer allocator.free(checksums);
+    defer for (checksums) |c| if (c) |s| allocator.free(s);
     @memset(checksums, null);
-    const attrs_buf = try ctx.allocator.alloc(types.DocumentAttribute, items.len);
-    defer ctx.allocator.free(attrs_buf);
+    const attrs_buf = try allocator.alloc(types.DocumentAttribute, items.len);
+    defer allocator.free(attrs_buf);
 
     // Each staged response owns the file_reference bytes referenced by media_items,
     // so the responses must outlive the SendMultiMedia call below.
     const Staged = client.Response(functions.messages.UploadMedia.Response);
-    const staged_responses = try ctx.allocator.alloc(Staged, items.len);
-    defer ctx.allocator.free(staged_responses);
+    const staged_responses = try allocator.alloc(Staged, items.len);
+    defer allocator.free(staged_responses);
     var staged_count: usize = 0;
     defer for (staged_responses[0..staged_count]) |s| s.deinit();
 
     for (items, 0..) |item, i| {
-        const input_file = try File.upload(ctx, item.data, item.name);
+        const input_file = try File.upload(msg.ctx, item.data, item.name);
         if (input_file == .InputFile) checksums[i] = input_file.InputFile.md5_checksum;
         const uploaded: types.InputMedia = switch (item.kind) {
             .photo => .{ .InputMediaUploadedPhoto = .{ .file = input_file } },
@@ -232,7 +194,7 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
         };
         // SendMultiMedia rejects InputMediaUploaded* directly — must stage via
         // uploadMedia first, then reference the server-assigned id.
-        staged_responses[staged_count] = try ctx.call(functions.messages.UploadMedia{ .peer = peer, .media = uploaded });
+        staged_responses[staged_count] = try msg.ctx.call(functions.messages.UploadMedia{ .peer = peer, .media = uploaded });
         const staged = staged_responses[staged_count].value;
         staged_count += 1;
         const media: types.InputMedia = switch (staged) {
@@ -262,11 +224,11 @@ pub fn sendAlbum(ctx: Context, update: types.UpdateNewMessage, items: []const Al
         };
         // SAFETY: immediately overwritten by io.random below
         var rand_id: i64 = undefined;
-        ctx.io.random(std.mem.asBytes(&rand_id));
+        msg.ctx.io.random(std.mem.asBytes(&rand_id));
         media_items[i] = .{ .media = media, .message = item.caption, .random_id = rand_id };
     }
 
-    try ctx.exec(functions.messages.SendMultiMedia{
+    try msg.ctx.exec(functions.messages.SendMultiMedia{
         .peer = peer,
         .multi_media = media_items,
         .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{ .reply_to_msg_id = id } }) else .none,

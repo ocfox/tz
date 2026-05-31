@@ -55,10 +55,12 @@ const sub_conn_noop_handler = Connector.UpdateHandler{
 };
 
 /// Build a HandlerEntry for a typed update.
-/// cb must be: fn (ctx: Context, update: UpdateType) anyerror!void
+/// cb may be:
+///   fn (ctx: Context, update: UpdateType) anyerror!void  — classic form
+///   fn (msg: Msg) anyerror!void                          — only for UpdateNewMessage
 pub fn handler(
     comptime UpdateType: type,
-    comptime cb: fn (ctx: Context, update: UpdateType) anyerror!void,
+    comptime cb: anytype,
 ) HandlerEntry {
     return .{
         .cid = UpdateType.cid,
@@ -67,7 +69,15 @@ pub fn handler(
                 switch (update) {
                     inline else => |inner| {
                         if (@TypeOf(inner) == UpdateType) {
-                            try cb(ctx, inner);
+                            const is_msg_handler = comptime @typeInfo(@TypeOf(cb)).@"fn".params.len == 1;
+                            if (comptime is_msg_handler) {
+                                switch (inner.message) {
+                                    .Message => |m| try cb(.{ .ctx = ctx, .raw = m }),
+                                    else => {},
+                                }
+                            } else {
+                                try cb(ctx, inner);
+                            }
                         }
                     },
                 }
@@ -157,7 +167,7 @@ pub const Context = struct {
     /// to contacts.resolveUsername and populates the cache from the response.
     /// `username` may include a leading `@`; lookup is case-insensitive.
     pub fn resolveUsername(self: Context, username: []const u8) !types.InputPeer {
-        const raw = std.mem.trimLeft(u8, username, "@");
+        const raw = std.mem.trimStart(u8, username, "@");
         if (raw.len == 0 or raw.len > 64) return error.InvalidUsername;
         var buf: [64]u8 = undefined;
         const name = std.ascii.lowerString(buf[0..raw.len], raw);
@@ -194,6 +204,16 @@ pub const Entities = struct {
 
     pub fn channelAccessHash(self: *const Entities, channel_id: i64) ?i64 {
         return self.channels.get(channel_id);
+    }
+
+    pub fn inputUser(self: *const Entities, user_id: i64) ?types.InputUser {
+        const ah = self.users.get(user_id) orelse return null;
+        return .{ .InputUser = .{ .user_id = user_id, .access_hash = ah } };
+    }
+
+    pub fn inputChannel(self: *const Entities, channel_id: i64) ?types.InputChannel {
+        const ah = self.channels.get(channel_id) orelse return null;
+        return .{ .InputChannel = .{ .channel_id = channel_id, .access_hash = ah } };
     }
 };
 

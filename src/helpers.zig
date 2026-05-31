@@ -3,8 +3,8 @@ const types = @import("types");
 const functions = @import("functions");
 const client = @import("client.zig");
 
-/// Convenience re-export: every helper takes a Context, so `helpers.Context` works.
 pub const Context = client.Context;
+pub const Msg = @import("Msg.zig");
 
 pub const media = @import("helpers/media.zig");
 pub const keyboard = @import("helpers/keyboard.zig");
@@ -15,18 +15,12 @@ pub const upload = File.upload;
 pub const documentLocation = File.documentLocation;
 pub const photoLocation = File.photoLocation;
 
-/// Convenience wrapper: download an entire file into a heap-allocated buffer.
-/// The caller must free the result with ctx.allocator.
-pub fn download(ctx: Context, location: @import("types").InputFileLocation) ![]u8 {
+/// Download an entire file into a heap-allocated buffer. Caller frees with ctx.allocator.
+pub fn download(ctx: Context, location: types.InputFileLocation) ![]u8 {
     var f = File.init(ctx, location);
     defer f.deinit();
     return f.readAll(ctx.allocator);
 }
-
-pub const ReplyOptions = struct {
-    reply_to: ?i32 = null,
-    entities: ?[]types.MessageEntity = null,
-};
 
 pub const PinOptions = struct {
     silent: bool = false,
@@ -52,20 +46,6 @@ pub const InlineQueryOptions = struct {
     is_private: bool = false,
     next_offset: ?[]const u8 = null,
 };
-
-pub fn reply(ctx: client.Context, update: types.UpdateNewMessage, text: []const u8, opts: ReplyOptions) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    const peer = peerFromMessage(ctx.entities, msg) orelse return;
-    try ctx.exec(functions.messages.SendMessage{
-        .peer = peer,
-        .message = text,
-        .entities = if (opts.entities) |e| .some(e) else .none,
-        .reply_to = if (opts.reply_to) |id| .some(.{ .InputReplyToMessage = .{ .reply_to_msg_id = id } }) else .none,
-    });
-}
 
 pub fn forwardMessages(ctx: client.Context, from_peer: types.InputPeer, to_peer: types.InputPeer, ids: []i32) !void {
     const random_ids = try ctx.allocator.alloc(i64, ids.len);
@@ -98,7 +78,6 @@ pub fn editMessage(ctx: client.Context, peer: types.InputPeer, msg_id: i32, opts
     });
 }
 
-/// Delete a single message. Uses channels.DeleteMessages for channel peers.
 pub fn deleteMessage(ctx: client.Context, peer: types.InputPeer, msg_id: i32) !void {
     var ids = [_]i32{msg_id};
     switch (peer) {
@@ -116,12 +95,10 @@ pub fn deleteMessage(ctx: client.Context, peer: types.InputPeer, msg_id: i32) !v
     }
 }
 
-/// Send a chat action (e.g. SendMessageTypingAction for "typing...").
 pub fn sendChatAction(ctx: client.Context, peer: types.InputPeer, action: types.SendMessageAction) !void {
     try ctx.exec(functions.messages.SetTyping{ .peer = peer, .action = action });
 }
 
-/// Fetch the bot's own User record. Caller owns the result; free with `resp.deinit()`.
 pub fn getMe(ctx: client.Context) !client.Response([]const types.User) {
     var id = [_]types.InputUser{.{ .InputUserSelf = .{} }};
     const resp = try ctx.call(functions.users.GetUsers{ .id = &id });
@@ -177,14 +154,25 @@ pub fn removeReaction(ctx: client.Context, peer: types.InputPeer, msg_id: i32) !
     });
 }
 
-/// Caller owns the result; free with `resp.deinit()`.
+/// Extract the message id from a SendMessage/SendMedia Updates response.
+pub fn sentMessageId(updates: types.Updates) ?i32 {
+    return switch (updates) {
+        .Updates => |u| blk: {
+            for (u.updates) |upd| {
+                if (upd == .UpdateMessageID) break :blk upd.UpdateMessageID.id;
+            }
+            break :blk null;
+        },
+        .UpdateShortSentMessage => |u| u.id,
+        else => null,
+    };
+}
+
 pub fn getUsers(ctx: client.Context, ids: []const types.InputUser) !client.Response([]const types.User) {
     const resp = try ctx.call(functions.users.GetUsers{ .id = ids });
     return .{ .arena = resp.arena, .value = resp.value };
 }
 
-/// Caller owns the result; the returned `chats` slice lives in `resp.arena`, so
-/// free with `resp.deinit()`.
 pub fn getChats(ctx: client.Context, ids: []const i64) !client.Response([]const types.Chat) {
     const resp = try ctx.call(functions.messages.GetChats{ .id = ids });
     const chats = switch (resp.value) {
@@ -194,7 +182,6 @@ pub fn getChats(ctx: client.Context, ids: []const i64) !client.Response([]const 
     return .{ .arena = resp.arena, .value = chats };
 }
 
-/// Caller owns the result; free with `resp.deinit()`.
 pub fn getChannels(ctx: client.Context, ids: []const types.InputChannel) !client.Response([]const types.Chat) {
     const resp = try ctx.call(functions.channels.GetChannels{ .id = ids });
     const chats = switch (resp.value) {
@@ -202,52 +189,6 @@ pub fn getChannels(ctx: client.Context, ids: []const types.InputChannel) !client
         .MessagesChatsSlice => |r| r.chats,
     };
     return .{ .arena = resp.arena, .value = chats };
-}
-
-pub fn Cmd(comptime U: type) type {
-    return struct {
-        pattern: []const u8,
-        is_prefix: bool = false,
-        handler: *const fn (client.Context, U) anyerror!void,
-
-        const Self = @This();
-
-        pub fn exact(comptime pattern: []const u8, comptime h: fn (client.Context, U) anyerror!void) Self {
-            return .{ .pattern = pattern, .handler = h };
-        }
-
-        pub fn prefix(comptime pattern: []const u8, comptime h: fn (client.Context, U) anyerror!void) Self {
-            return .{ .pattern = pattern, .is_prefix = true, .handler = h };
-        }
-    };
-}
-
-pub fn route(ctx: client.Context, update: anytype, text: []const u8, comptime routes: anytype) !bool {
-    inline for (routes) |r| {
-        const matched = if (r.is_prefix)
-            std.mem.startsWith(u8, text, r.pattern)
-        else
-            std.mem.eql(u8, text, r.pattern);
-        if (matched) {
-            try r.handler(ctx, update);
-            return true;
-        }
-    }
-    return false;
-}
-
-pub fn peerFromMessage(entities: client.Entities, msg: types.Message_) ?types.InputPeer {
-    return switch (msg.peer_id) {
-        .PeerUser => |p| .{ .InputPeerUser = .{
-            .user_id = p.user_id,
-            .access_hash = entities.accessHash(p.user_id) orelse return null,
-        } },
-        .PeerChat => |p| .{ .InputPeerChat = .{ .chat_id = p.chat_id } },
-        .PeerChannel => |p| .{ .InputPeerChannel = .{
-            .channel_id = p.channel_id,
-            .access_hash = entities.channelAccessHash(p.channel_id) orelse return null,
-        } },
-    };
 }
 
 pub fn peerFromCallbackQuery(entities: client.Entities, update: types.UpdateBotCallbackQuery) ?types.InputPeer {

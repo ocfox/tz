@@ -19,6 +19,7 @@ pub const default_dcs = Connector.default_dcs;
 
 pub const helpers = @import("helpers.zig");
 pub const File = @import("File.zig");
+pub const Msg = @import("Msg.zig");
 
 pub const State = @import("State.zig");
 pub const PeerCache = State.PeerCache;
