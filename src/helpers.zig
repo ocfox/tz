@@ -10,12 +10,18 @@ pub const media = @import("helpers/media.zig");
 pub const keyboard = @import("helpers/keyboard.zig");
 pub const FormattedText = @import("helpers/FormattedText.zig");
 
-pub const upload = @import("upload.zig").upload;
-pub const UploadOptions = @import("upload.zig").UploadOptions;
+pub const File = @import("File.zig");
+pub const upload = File.upload;
+pub const documentLocation = File.documentLocation;
+pub const photoLocation = File.photoLocation;
 
-pub const download = @import("download.zig").download;
-pub const documentLocation = @import("download.zig").documentLocation;
-pub const photoLocation = @import("download.zig").photoLocation;
+/// Convenience wrapper: download an entire file into a heap-allocated buffer.
+/// The caller must free the result with ctx.allocator.
+pub fn download(ctx: Context, location: @import("types").InputFileLocation) ![]u8 {
+    var f = File.init(ctx, location);
+    defer f.deinit();
+    return f.readAll(ctx.allocator);
+}
 
 pub const ReplyOptions = struct {
     reply_to: ?i32 = null,

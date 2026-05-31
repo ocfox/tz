@@ -18,6 +18,7 @@ pub const DC = Connector.DC;
 pub const default_dcs = Connector.default_dcs;
 
 pub const helpers = @import("helpers.zig");
+pub const File = @import("File.zig");
 
 pub const State = @import("State.zig");
 pub const PeerCache = State.PeerCache;
@@ -30,6 +31,7 @@ test {
     _ = @import("crypto/rsa.zig");
     _ = @import("crypto/dh.zig");
     _ = @import("crypto/aes_ige.zig");
+    _ = @import("crypto/aes_ctr.zig");
     _ = @import("mtproto/Session.zig");
     _ = @import("State.zig");
     _ = @import("RpcError.zig");

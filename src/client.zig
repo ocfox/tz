@@ -89,6 +89,8 @@ pub const Context = struct {
     callFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
     /// Like callFn but routes FILE_MIGRATE to a sub-connection automatically.
     callFileFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
+    /// Routes to a CDN DC sub-connection (no account auth required).
+    callCdnFn: *const fn (client: *anyopaque, io: Io, dc_id: i32, bytes: []const u8) anyerror![]u8,
 
     /// Send a typed TL request, return the decoded response. The caller owns the
     /// result and must free it with `resp.deinit()`. If you don't need the response,
@@ -118,6 +120,15 @@ pub const Context = struct {
         const bytes = try codec.encodeAlloc(request, self.allocator);
         defer self.allocator.free(bytes);
         const raw = try self.callFileFn(self.client, self.io, bytes);
+        defer self.allocator.free(raw);
+        return decodeOwned(@TypeOf(request).Response, raw, self.allocator);
+    }
+
+    /// Send a request to a CDN DC. Used for GetCdnFile and related RPCs.
+    pub fn callCdn(self: Context, dc_id: i32, request: anytype) !Response(@TypeOf(request).Response) {
+        const bytes = try codec.encodeAlloc(request, self.allocator);
+        defer self.allocator.free(bytes);
+        const raw = try self.callCdnFn(self.client, self.io, dc_id, bytes);
         defer self.allocator.free(raw);
         return decodeOwned(@TypeOf(request).Response, raw, self.allocator);
     }
@@ -205,6 +216,11 @@ pub const ClientOptions = struct {
     max_rpc_retries: u32 = 5,
 };
 
+const CdnConn = struct {
+    conn: *Connector,
+    mem: *Storage.Memory, // heap-allocated; CDN connections don't persist auth
+};
+
 /// Client(handlers) — handlers is a comptime-known slice of HandlerEntry.
 pub fn Client(comptime handlers: []const HandlerEntry) type {
     return struct {
@@ -220,6 +236,9 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
         dc_list: ?[]Connector.DC = null,
         sub_conns: std.AutoHashMapUnmanaged(u8, *Connector) = .empty,
         sub_conns_mu: std.Io.Mutex = std.Io.Mutex.init,
+        cdn_dcs: std.AutoHashMapUnmanaged(i32, std.Io.net.IpAddress) = .empty,
+        cdn_conns: std.AutoHashMapUnmanaged(i32, CdnConn) = .empty,
+        cdn_conns_mu: std.Io.Mutex = .init,
         state: @import("State.zig") = .{},
         mb_mutex: std.Io.Mutex = .init,
         state_initialized: bool = false,
@@ -234,11 +253,18 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
 
         pub fn deinit(self: *Self) void {
             if (self.dc_list) |list| self.allocator.free(list);
-            // Sub-conns should have been closed in runOnce's defer; clean up any stragglers.
             var it = self.sub_conns.valueIterator();
             while (it.next()) |conn| conn.*.deinit();
-            self.state.deinit(self.allocator);
             self.sub_conns.deinit(self.allocator);
+            var cdn_it = self.cdn_conns.valueIterator();
+            while (cdn_it.next()) |entry| {
+                entry.conn.deinit();
+                entry.mem.deinit(self.allocator);
+                self.allocator.destroy(entry.mem);
+            }
+            self.cdn_conns.deinit(self.allocator);
+            self.cdn_dcs.deinit(self.allocator);
+            self.state.deinit(self.allocator);
             self.allocator.destroy(self);
         }
 
@@ -345,6 +371,62 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 self.allocator.free(raw);
                 try r;
             }
+        }
+
+        fn callCdnImpl(ptr: *anyopaque, io2: Io, dc_id: i32, bytes: []const u8) anyerror![]u8 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            const conn = try self.getOrCreateCdnConn(io2, dc_id);
+            return self.callViaConnector(io2, conn, bytes);
+        }
+
+        fn getOrCreateCdnConn(self: *Self, io2: Io, dc_id: i32) !*Connector {
+            {
+                try self.cdn_conns_mu.lock(io2);
+                defer self.cdn_conns_mu.unlock(io2);
+                if (self.cdn_conns.get(dc_id)) |entry| return entry.conn;
+            }
+
+            const addr = blk: {
+                if (self.cdn_dcs.get(dc_id)) |a| break :blk a;
+                try self.fetchDcList(io2);
+                break :blk self.cdn_dcs.get(dc_id) orelse return error.CdnDcNotFound;
+            };
+
+            const mem = try self.allocator.create(Storage.Memory);
+            errdefer self.allocator.destroy(mem);
+            mem.* = .{};
+
+            const conn = try Connector.connect(io2, self.allocator, .{
+                .dc = .{ .id = 0, .addr = addr, .test_server = self.opts.dc.test_server },
+                .transport = .abridged,
+                .storage = mem.storage(),
+                .api_id = self.opts.api_id,
+                .api_hash = self.opts.api_hash,
+            });
+            errdefer conn.deinit();
+            try conn.run(io2, sub_conn_noop_handler);
+            errdefer {
+                conn.close(io2);
+                conn.join(io2);
+            }
+
+            try self.cdn_conns_mu.lock(io2);
+            const gop = self.cdn_conns.getOrPut(self.allocator, dc_id) catch |err| {
+                self.cdn_conns_mu.unlock(io2);
+                return err;
+            };
+            if (gop.found_existing) {
+                self.cdn_conns_mu.unlock(io2);
+                conn.close(io2);
+                conn.join(io2);
+                conn.deinit();
+                mem.deinit(self.allocator);
+                self.allocator.destroy(mem);
+                return gop.value_ptr.conn;
+            }
+            gop.value_ptr.* = .{ .conn = conn, .mem = mem };
+            self.cdn_conns_mu.unlock(io2);
+            return conn;
         }
 
         fn callViaConnector(self: *Self, io2: Io, c: *Connector, bytes: []const u8) ![]u8 {
@@ -519,6 +601,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                         .mb_mutex = &self.mb_mutex,
                         .callFn = callImpl,
                         .callFileFn = callFileImpl,
+                        .callCdnFn = callCdnImpl,
                     });
                     self.user_authorized = true;
                     self.markHomeDc(io);
@@ -555,11 +638,14 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
             var list: std.ArrayList(Connector.DC) = .empty;
             defer list.deinit(self.allocator);
             for (config.dc_options) |opt| {
-                if (opt.cdn.value != null) continue;
-                if (opt.media_only.value != null) continue;
                 if (opt.ipv6.value != null) continue;
-                const id = std.math.cast(u8, opt.id) orelse continue;
                 const addr = std.Io.net.IpAddress.parseIp4(opt.ip_address, @intCast(opt.port)) catch continue;
+                if (opt.cdn.value != null) {
+                    self.cdn_dcs.put(self.allocator, opt.id, addr) catch {};
+                    continue;
+                }
+                if (opt.media_only.value != null) continue;
+                const id = std.math.cast(u8, opt.id) orelse continue;
                 try list.append(self.allocator, .{ .id = id, .addr = addr, .test_server = self.opts.dc.test_server });
             }
             if (self.dc_list) |old| self.allocator.free(old);
@@ -836,6 +922,7 @@ pub fn Client(comptime handlers: []const HandlerEntry) type {
                 .mb_mutex = &self.mb_mutex,
                 .callFn = callImpl,
                 .callFileFn = callFileImpl,
+                .callCdnFn = callCdnImpl,
             };
 
             for (updates) |u| {
