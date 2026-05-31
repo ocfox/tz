@@ -161,8 +161,7 @@ fn onForward(msg: tz.Msg) !void {
     try h.forwardMessages(msg.ctx, peer, peer, &ids);
 }
 
-fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = tz.Msg.from(ctx, update) orelse return;
+fn onMessage(msg: tz.Msg) !void {
     if (!isAllowed(msg)) return;
 
     if (msg.is("/start") or msg.is("/help")) return onHelp(msg);
@@ -212,7 +211,7 @@ fn onCallback(ctx: tz.Context, update: tg.UpdateBotCallbackQuery) !void {
 }
 
 const handlers = &.{
-    tz.handler(tg.UpdateNewMessage, onMessage),
+    tz.Msg.handler(onMessage),
     tz.handler(tg.UpdateBotCallbackQuery, onCallback),
 };
 

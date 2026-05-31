@@ -19,14 +19,13 @@ pub const std_options: std.Options = .{ .log_level = .info };
 // and re-runs auth, and we don't want to re-prompt for the phone number each time.
 var cached_phone: ?[]u8 = null;
 
-fn onNewMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = tz.Msg.from(ctx, update) orelse return;
+fn onNewMessage(msg: tz.Msg) !void {
     if (msg.text().len == 0) return;
     std.log.info("msg: {s}", .{msg.text()});
 }
 
 const Client = tz.Client(&.{
-    tz.handler(tg.UpdateNewMessage, onNewMessage),
+    tz.Msg.handler(onNewMessage),
 });
 
 /// Prompt on stderr, read one line from stdin, return an owned, trimmed copy.

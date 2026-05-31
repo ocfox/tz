@@ -14,13 +14,12 @@ echo bot: ~700kb statically linked (`ReleaseSmall`).
 
 ## usage
 
-handlers are `fn(ctx: Context, update: T) !void`. use `tz.Msg` to work with messages:
+message handlers are `fn(msg: Msg) !void`, registered with `tz.Msg.handler`. other update types use `tz.handler` with `fn(ctx, update) !void`:
 
 ```zig
 const h = tz.helpers;
 
-fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = tz.Msg.from(ctx, update) orelse return;
+fn onMessage(msg: tz.Msg) !void {
     try msg.reply("hello");
 }
 
@@ -29,7 +28,7 @@ fn onCallback(ctx: tz.Context, update: tg.UpdateBotCallbackQuery) !void {
 }
 
 const handlers = &.{
-    tz.handler(tg.UpdateNewMessage, onMessage),
+    tz.Msg.handler(onMessage),
     tz.handler(tg.UpdateBotCallbackQuery, onCallback),
 };
 
@@ -51,8 +50,7 @@ try client.run(io);
 command routing is plain zig:
 
 ```zig
-fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = tz.Msg.from(ctx, update) orelse return;
+fn onMessage(msg: tz.Msg) !void {
     if (msg.is("/start")) return onStart(msg);
     if (msg.prefix("/echo ")) return onEcho(msg);
 }
@@ -102,7 +100,7 @@ const bytes = try h.download(msg.ctx, msg.mediaLocation().?);
 defer msg.ctx.allocator.free(bytes);
 ```
 
-other update types follow the same pattern — any `UpdateXxx` from the TL schema:
+other update types — any `UpdateXxx` from the TL schema:
 
 ```zig
 fn onCallback(ctx: tz.Context, update: tg.UpdateBotCallbackQuery) !void {
@@ -118,7 +116,7 @@ fn onEditedMessage(ctx: tz.Context, update: tg.UpdateEditMessage) !void {
 }
 
 const handlers = &.{
-    tz.handler(tg.UpdateNewMessage, onMessage),
+    tz.Msg.handler(onMessage),
     tz.handler(tg.UpdateBotCallbackQuery, onCallback),
     tz.handler(tg.UpdateBotInlineQuery, onInlineQuery),
     tz.handler(tg.UpdateEditMessage, onEditedMessage),

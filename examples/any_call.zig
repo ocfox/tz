@@ -11,43 +11,37 @@ const tz = @import("tz");
 const tg = tz.types;
 const f = tz.functions;
 
-fn onCommand(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = tz.Msg.from(ctx, update) orelse return;
+fn onCommand(msg: tz.Msg) !void {
     if (msg.text().len == 0 or msg.text()[0] != '/') return;
-
     const peer = msg.peer() orelse return;
-
     if (msg.is("/whoami")) {
         var id_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
-        const users_resp = try ctx.call(f.users.GetUsers{ .id = &id_input });
+        const users_resp = try msg.ctx.call(f.users.GetUsers{ .id = &id_input });
         defer users_resp.deinit();
-
         const user = switch (users_resp.value[0]) {
             .User => |u| u,
             else => return,
         };
-
         var buf: [256]u8 = undefined;
         const text = try std.fmt.bufPrint(&buf, "id={} name={s}", .{
             user.id,
             user.first_name.value orelse "(none)",
         });
-        try ctx.exec(f.messages.SendMessage{ .peer = peer, .message = text });
+        try msg.ctx.exec(f.messages.SendMessage{ .peer = peer, .message = text });
     } else if (msg.is("/delete")) {
         var ids = [_]i32{msg.id()};
-        try ctx.exec(f.messages.DeleteMessages{ .id = &ids });
+        try msg.ctx.exec(f.messages.DeleteMessages{ .id = &ids });
     }
 }
 
-fn onEcho(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = tz.Msg.from(ctx, update) orelse return;
+fn onEcho(msg: tz.Msg) !void {
     if (msg.text().len == 0 or msg.text()[0] == '/') return;
     try msg.reply(msg.text());
 }
 
 const handlers = &.{
-    tz.handler(tg.UpdateNewMessage, onCommand),
-    tz.handler(tg.UpdateNewMessage, onEcho),
+    tz.Msg.handler(onCommand),
+    tz.Msg.handler(onEcho),
 };
 
 pub fn main(init: std.process.Init.Minimal) !void {

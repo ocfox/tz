@@ -5,14 +5,13 @@ const std = @import("std");
 const tz = @import("tz");
 const tg = tz.types;
 
-fn onNewMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = tz.Msg.from(ctx, update) orelse return;
+fn onNewMessage(msg: tz.Msg) !void {
     if (msg.text().len == 0) return;
     try msg.reply(msg.text());
 }
 
 const handlers = &.{
-    tz.handler(tg.UpdateNewMessage, onNewMessage),
+    tz.Msg.handler(onNewMessage),
 };
 
 pub fn main(init: std.process.Init.Minimal) !void {

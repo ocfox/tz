@@ -4,12 +4,24 @@ const types = @import("types");
 const functions = @import("functions");
 const Context = @import("Context.zig");
 const File = @import("File.zig");
+const client = @import("client.zig");
 
 /// The concrete message struct (types.Message_ — not the Message union).
 pub const Raw = types.Message_;
 
 ctx: Context,
 raw: Raw,
+
+/// Register a fn(Msg) !void as a Handler for UpdateNewMessage.
+/// Filters non-Message variants (empty/service) silently.
+pub fn handler(comptime cb: fn(Msg) anyerror!void) client.Handler {
+    return client.handler(types.UpdateNewMessage, struct {
+        fn dispatch(ctx: Context, update: types.UpdateNewMessage) anyerror!void {
+            const msg = from(ctx, update) orelse return;
+            try cb(msg);
+        }
+    }.dispatch);
+}
 
 pub fn from(ctx: Context, update: types.UpdateNewMessage) ?Msg {
     return switch (update.message) {
