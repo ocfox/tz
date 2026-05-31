@@ -9,41 +9,31 @@ const functions = @import("functions");
 const RpcError = @import("RpcError.zig");
 const ulog = std.log.scoped(.updates);
 
-/// True if `raw` is a serialized `rpc_error` rather than a normal response body.
-fn isRpcError(raw: []const u8) bool {
-    return raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid;
-}
+pub const Context = @import("Context.zig");
+pub const Entities = Context.Entities;
+pub const Response = Context.Response;
+const decodeOwned = Context.decodeOwned;
 
-pub const HandlerEntry = struct {
+pub const Handler = struct {
     cid: u32,
     dispatch: *const fn (ctx: Context, update: types.Update) anyerror!void,
 };
 
-/// Owned decode result: `value` and all of its nested allocations live in `arena`.
-/// Free the whole tree at once with `deinit()` — there is no per-field freeing and
-/// no way to under/over-free. Mirrors the ownership model of `std.json.Parsed(T)`.
-pub fn Response(comptime T: type) type {
-    return struct {
-        arena: *std.heap.ArenaAllocator,
-        value: T,
-
-        pub fn deinit(self: @This()) void {
-            const gpa = self.arena.child_allocator;
-            self.arena.deinit();
-            gpa.destroy(self.arena);
-        }
+pub fn handler(
+    comptime UpdateType: type,
+    comptime cb: fn (Context, UpdateType) anyerror!void,
+) Handler {
+    return .{
+        .cid = UpdateType.cid,
+        .dispatch = struct {
+            fn dispatch(ctx: Context, update: types.Update) anyerror!void {
+                switch (update) {
+                    inline else => |inner| if (@TypeOf(inner) == UpdateType)
+                        try cb(ctx, inner),
+                }
+            }
+        }.dispatch,
     };
-}
-
-/// Decode `raw` into a freshly-allocated arena and hand back an owning `Response(T)`.
-fn decodeOwned(comptime T: type, raw: []const u8, gpa: Allocator) !Response(T) {
-    const arena = try gpa.create(std.heap.ArenaAllocator);
-    errdefer gpa.destroy(arena);
-    arena.* = std.heap.ArenaAllocator.init(gpa);
-    errdefer arena.deinit();
-    var r: std.Io.Reader = .fixed(raw);
-    const value = try codec.decode(T, &r, arena.allocator());
-    return .{ .arena = arena, .value = value };
 }
 
 var subConnDummy: u8 = 0;
@@ -54,168 +44,10 @@ const sub_conn_noop_handler = Connector.UpdateHandler{
     }.h },
 };
 
-/// Build a HandlerEntry for a typed update.
-/// cb may be:
-///   fn (ctx: Context, update: UpdateType) anyerror!void  — classic form
-///   fn (msg: Msg) anyerror!void                          — only for UpdateNewMessage
-pub fn handler(
-    comptime UpdateType: type,
-    comptime cb: anytype,
-) HandlerEntry {
-    return .{
-        .cid = UpdateType.cid,
-        .dispatch = struct {
-            fn dispatch(ctx: Context, update: types.Update) anyerror!void {
-                switch (update) {
-                    inline else => |inner| {
-                        if (@TypeOf(inner) == UpdateType) {
-                            const is_msg_handler = comptime @typeInfo(@TypeOf(cb)).@"fn".params.len == 1;
-                            if (comptime is_msg_handler) {
-                                switch (inner.message) {
-                                    .Message => |m| try cb(.{ .ctx = ctx, .raw = m }),
-                                    else => {},
-                                }
-                            } else {
-                                try cb(ctx, inner);
-                            }
-                        }
-                    },
-                }
-            }
-        }.dispatch,
-    };
+/// True if `raw` is a serialized `rpc_error` rather than a normal response body.
+fn isRpcError(raw: []const u8) bool {
+    return raw.len >= 4 and std.mem.readInt(u32, raw[0..4], .little) == types.RpcError.cid;
 }
-
-/// Context passed to handler callbacks.
-pub const Context = struct {
-    client: *anyopaque,
-    io: Io,
-    allocator: Allocator,
-    api_id: i32,
-    api_hash: []const u8,
-    entities: Entities,
-    peer_cache: *@import("State.zig").PeerCache,
-    mb_mutex: *std.Io.Mutex,
-    callFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
-    /// Like callFn but routes FILE_MIGRATE to a sub-connection automatically.
-    callFileFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
-    /// Routes to a CDN DC sub-connection (no account auth required).
-    callCdnFn: *const fn (client: *anyopaque, io: Io, dc_id: i32, bytes: []const u8) anyerror![]u8,
-
-    /// Send a typed TL request, return the decoded response. The caller owns the
-    /// result and must free it with `resp.deinit()`. If you don't need the response,
-    /// use `exec` instead. FLOOD_WAIT and transient server faults are retried
-    /// transparently; other server errors surface as Zig errors (`error.RpcError`,
-    /// or a named one like `error.PhoneCodeInvalid` — see `handleRpcError`).
-    pub fn call(self: Context, request: anytype) !Response(@TypeOf(request).Response) {
-        const bytes = try codec.encodeAlloc(request, self.allocator);
-        defer self.allocator.free(bytes);
-        const raw = try self.callFn(self.client, self.io, bytes);
-        defer self.allocator.free(raw);
-        return decodeOwned(@TypeOf(request).Response, raw, self.allocator);
-    }
-
-    /// Send a typed TL request, discard the response.
-    pub fn exec(self: Context, request: anytype) !void {
-        const bytes = try codec.encodeAlloc(request, self.allocator);
-        defer self.allocator.free(bytes);
-        const raw = try self.callFn(self.client, self.io, bytes);
-        self.allocator.free(raw);
-    }
-
-    /// Like call but for upload/download RPCs: automatically follows FILE_MIGRATE to
-    /// the file DC. Uses heap allocation for encoding (upload parts can be large).
-    /// The caller owns the result and must free it with `resp.deinit()`.
-    pub fn callFile(self: Context, request: anytype) !Response(@TypeOf(request).Response) {
-        const bytes = try codec.encodeAlloc(request, self.allocator);
-        defer self.allocator.free(bytes);
-        const raw = try self.callFileFn(self.client, self.io, bytes);
-        defer self.allocator.free(raw);
-        return decodeOwned(@TypeOf(request).Response, raw, self.allocator);
-    }
-
-    /// Send a request to a CDN DC. Used for GetCdnFile and related RPCs.
-    pub fn callCdn(self: Context, dc_id: i32, request: anytype) !Response(@TypeOf(request).Response) {
-        const bytes = try codec.encodeAlloc(request, self.allocator);
-        defer self.allocator.free(bytes);
-        const raw = try self.callCdnFn(self.client, self.io, dc_id, bytes);
-        defer self.allocator.free(raw);
-        return decodeOwned(@TypeOf(request).Response, raw, self.allocator);
-    }
-
-    /// Like callFile but discards the response (e.g. SaveFilePart returns only Bool).
-    pub fn execFile(self: Context, request: anytype) !void {
-        const bytes = try codec.encodeAlloc(request, self.allocator);
-        defer self.allocator.free(bytes);
-        const raw = try self.callFileFn(self.client, self.io, bytes);
-        self.allocator.free(raw);
-    }
-
-    /// Resolve a known peer's InputPeer (observed during this session).
-    pub fn resolvePeer(self: Context, id: i64) ?types.InputPeer {
-        self.mb_mutex.lockUncancelable(self.io);
-        defer self.mb_mutex.unlock(self.io);
-        return self.peer_cache.inputPeer(id);
-    }
-    pub fn resolveInputChannel(self: Context, id: i64) ?types.InputChannel {
-        self.mb_mutex.lockUncancelable(self.io);
-        defer self.mb_mutex.unlock(self.io);
-        return self.peer_cache.inputChannel(id);
-    }
-
-    /// Resolve a username to an InputPeer.  Checks the cache first; falls back
-    /// to contacts.resolveUsername and populates the cache from the response.
-    /// `username` may include a leading `@`; lookup is case-insensitive.
-    pub fn resolveUsername(self: Context, username: []const u8) !types.InputPeer {
-        const raw = std.mem.trimStart(u8, username, "@");
-        if (raw.len == 0 or raw.len > 64) return error.InvalidUsername;
-        var buf: [64]u8 = undefined;
-        const name = std.ascii.lowerString(buf[0..raw.len], raw);
-
-        {
-            self.mb_mutex.lockUncancelable(self.io);
-            defer self.mb_mutex.unlock(self.io);
-            if (self.peer_cache.lookupUsername(name)) |id|
-                if (self.peer_cache.inputPeer(id)) |ip| return ip;
-        }
-
-        const r = try self.call(functions.contacts.ResolveUsername{ .username = name });
-        defer r.deinit();
-
-        self.mb_mutex.lockUncancelable(self.io);
-        defer self.mb_mutex.unlock(self.io);
-        try self.peer_cache.update(self.allocator, r.value.users, r.value.chats);
-        const id: i64 = switch (r.value.peer) {
-            .PeerUser => |p| p.user_id,
-            .PeerChannel => |p| p.channel_id,
-            .PeerChat => |p| p.chat_id,
-        };
-        return self.peer_cache.inputPeer(id) orelse error.PeerNotFound;
-    }
-};
-
-pub const Entities = struct {
-    users: std.AutoHashMapUnmanaged(i64, i64) = .empty,
-    channels: std.AutoHashMapUnmanaged(i64, i64) = .empty,
-
-    pub fn accessHash(self: *const Entities, user_id: i64) ?i64 {
-        return self.users.get(user_id);
-    }
-
-    pub fn channelAccessHash(self: *const Entities, channel_id: i64) ?i64 {
-        return self.channels.get(channel_id);
-    }
-
-    pub fn inputUser(self: *const Entities, user_id: i64) ?types.InputUser {
-        const ah = self.users.get(user_id) orelse return null;
-        return .{ .InputUser = .{ .user_id = user_id, .access_hash = ah } };
-    }
-
-    pub fn inputChannel(self: *const Entities, channel_id: i64) ?types.InputChannel {
-        const ah = self.channels.get(channel_id) orelse return null;
-        return .{ .InputChannel = .{ .channel_id = channel_id, .access_hash = ah } };
-    }
-};
 
 pub const ClientOptions = struct {
     dc: Connector.DC = Connector.default_dcs[1],
@@ -241,8 +73,8 @@ const CdnConn = struct {
     mem: *Storage.Memory, // heap-allocated; CDN connections don't persist auth
 };
 
-/// Client(handlers) — handlers is a comptime-known slice of HandlerEntry.
-pub fn Client(comptime handlers: []const HandlerEntry) type {
+/// Client(handlers) — handlers is a comptime-known slice of Handler.
+pub fn Client(comptime handlers: []const Handler) type {
     return struct {
         const Self = @This();
 

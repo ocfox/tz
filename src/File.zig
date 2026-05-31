@@ -3,11 +3,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const types = @import("types");
 const functions = @import("functions");
-const client = @import("client.zig");
+const Context = @import("Context.zig");
+const codec = @import("codec");
 const aes_ctr = @import("crypto/aes_ctr.zig");
 const sha = @import("crypto/sha.zig");
-
-const Context = client.Context;
 
 const chunk_size: i32 = 512 * 1024;
 const cdn_block: i64 = 128 * 1024;
@@ -214,7 +213,7 @@ const upload_part = 128 * 1024;
 /// For small files (≤10 MB) the InputFile.md5_checksum is heap-allocated via
 /// ctx.allocator; the caller must free it.
 pub fn upload(ctx: Context, data: []const u8, name: []const u8) !types.InputFile {
-    const file_id = client.nextRandomId();
+    const file_id = codec.nextRandomId();
     const n_parts: i32 = @intCast((data.len + upload_part - 1) / upload_part);
     const is_big = data.len > big_threshold;
 

@@ -6,15 +6,11 @@ const tz = @import("tz");
 const tg = tz.types;
 
 fn onNewMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    if (msg.message.len == 0) return;
-    try tz.helpers.reply(ctx, update, msg.message, .{});
+    const msg = tz.Msg.from(ctx, update) orelse return;
+    if (msg.text().len == 0) return;
+    try msg.reply(msg.text());
 }
 
-// Compile-time handler list. No runtime hashmap, no dispatcher to .init() or .bind().
 const handlers = &.{
     tz.handler(tg.UpdateNewMessage, onNewMessage),
 };
@@ -24,16 +20,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer _ = debug_allocator.deinit();
     const allocator = debug_allocator.allocator();
 
-    // std.Io.Threaded gives us an IO runtime backed by a thread pool.
-    // All network IO and timers go through this.
     var threaded = std.Io.Threaded.init(allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
-    // Session is persisted to disk so the bot can reconnect without re-doing DH key exchange.
     var file_storage = tz.Storage.File.init("echo_bot.session");
 
-    // Credentials are read from environment and wired directly into Client.
     const client = try tz.Client(handlers).init(allocator, .{
         .api_id = try std.fmt.parseInt(i32, init.environ.getPosix("TZ_API_ID") orelse usage(), 10),
         .api_hash = init.environ.getPosix("TZ_API_HASH") orelse usage(),
@@ -42,7 +34,6 @@ pub fn main(init: std.process.Init.Minimal) !void {
     });
     defer client.deinit();
 
-    // run() blocks until close() is called. Reconnects automatically on disconnect.
     try client.run(io);
 }
 

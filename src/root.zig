@@ -7,8 +7,8 @@ pub const functions = @import("functions");
 
 pub const Client = client.Client;
 pub const ClientOptions = client.ClientOptions;
-pub const Context = client.Context;
-pub const Response = client.Response;
+pub const Context = @import("Context.zig");
+pub const Response = Context.Response;
 pub const RpcError = @import("RpcError.zig");
 pub const handler = client.handler;
 

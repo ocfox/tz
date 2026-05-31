@@ -1,11 +1,8 @@
-//! any_call — demonstrates direct ctx.call() usage without helpers.
+//! any_call — demonstrates direct ctx.call() / ctx.exec() without helpers.
 //!
 //! Two handlers on the same update type, split by functional boundary:
 //!   onCommand  — /whoami (fetch own user) and /delete (delete command message)
 //!   onEcho     — everything else: echo with a quote reply
-//!
-//! UpdateNewMessage.message is a union (Message | MessageService | MessageEmpty),
-//! so every handler must switch on it — there is no shortcut.
 //!
 //! usage: TZ_API_ID=<id> TZ_API_HASH=<hash> TZ_BOT_TOKEN=<token> zig build any-call
 
@@ -15,15 +12,12 @@ const tg = tz.types;
 const f = tz.functions;
 
 fn onCommand(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    if (msg.message.len == 0 or msg.message[0] != '/') return;
+    const msg = tz.Msg.from(ctx, update) orelse return;
+    if (msg.text().len == 0 or msg.text()[0] != '/') return;
 
-    const peer = tz.helpers.peerFromMessage(ctx.entities, msg) orelse return;
+    const peer = msg.peer() orelse return;
 
-    if (std.mem.eql(u8, msg.message, "/whoami")) {
+    if (msg.is("/whoami")) {
         var id_input = [_]tg.InputUser{.{ .InputUserSelf = .{} }};
         const users_resp = try ctx.call(f.users.GetUsers{ .id = &id_input });
         defer users_resp.deinit();
@@ -38,33 +32,17 @@ fn onCommand(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
             user.id,
             user.first_name.value orelse "(none)",
         });
-        try ctx.exec(f.messages.SendMessage{
-            .peer = peer,
-            .message = text,
-        });
-    } else if (std.mem.eql(u8, msg.message, "/delete")) {
-        var ids = [_]i32{msg.id};
-        try ctx.exec(f.messages.DeleteMessages{
-            .id = &ids,
-        });
+        try ctx.exec(f.messages.SendMessage{ .peer = peer, .message = text });
+    } else if (msg.is("/delete")) {
+        var ids = [_]i32{msg.id()};
+        try ctx.exec(f.messages.DeleteMessages{ .id = &ids });
     }
 }
 
 fn onEcho(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    if (msg.message.len == 0 or msg.message[0] == '/') return;
-
-    const peer = tz.helpers.peerFromMessage(ctx.entities, msg) orelse return;
-    try ctx.exec(f.messages.SendMessage{
-        .peer = peer,
-        .message = msg.message,
-        .reply_to = .some(.{ .InputReplyToMessage = .{
-            .reply_to_msg_id = msg.id,
-        } }),
-    });
+    const msg = tz.Msg.from(ctx, update) orelse return;
+    if (msg.text().len == 0 or msg.text()[0] == '/') return;
+    try msg.reply(msg.text());
 }
 
 const handlers = &.{

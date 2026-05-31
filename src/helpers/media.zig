@@ -1,7 +1,7 @@
 const std = @import("std");
 const types = @import("types");
 const functions = @import("functions");
-const client = @import("../client.zig");
+const client = @import("../Context.zig");
 const File = @import("../File.zig");
 const Msg = @import("../Msg.zig");
 

@@ -14,17 +14,23 @@ echo bot: ~700kb statically linked (`ReleaseSmall`).
 
 ## usage
 
-handlers receive a `tz.Msg` — a value type that carries both the context and the concrete message struct. no unwrapping boilerplate, full access to everything:
+handlers are `fn(ctx: Context, update: T) !void`. use `tz.Msg` to work with messages:
 
 ```zig
 const h = tz.helpers;
 
-fn onMessage(msg: tz.Msg) !void {
+fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
+    const msg = tz.Msg.from(ctx, update) orelse return;
     try msg.reply("hello");
+}
+
+fn onCallback(ctx: tz.Context, update: tg.UpdateBotCallbackQuery) !void {
+    try h.answerCallbackQuery(ctx, update, .{ .text = "clicked!" });
 }
 
 const handlers = &.{
     tz.handler(tg.UpdateNewMessage, onMessage),
+    tz.handler(tg.UpdateBotCallbackQuery, onCallback),
 };
 
 var storage = tz.Storage.File.init("bot.session");
@@ -38,26 +44,27 @@ defer client.deinit();
 try client.run(io);
 ```
 
-`msg` accessors: `msg.text()`, `msg.id()`, `msg.date()`, `msg.peer()`, `msg.senderId()`, `msg.replyToId()`, `msg.mediaLocation()`. active operations: `msg.reply(text)`, `msg.respond(text)`, `msg.replyFmt(text, entities)`. raw access via `msg.raw` (the concrete `Message_` struct) and `msg.ctx` (full `Context`).
+`tz.Msg` wraps `ctx` + the concrete `Message_` struct. accessors: `text()`, `id()`, `date()`, `peer()`, `senderId()`, `replyToId()`, `mediaLocation()`, `is(s)`, `prefix(s)`, `contains(s)`. active operations: `reply(text)`, `respond(text)`, `replyFmt(text, entities)`. raw access via `msg.raw` and `msg.ctx`.
 
 `respond` sends to the same peer without a reply thread. `reply` sets `reply_to` so clients show the quote.
 
 command routing is plain zig:
 
 ```zig
-fn onMessage(msg: tz.Msg) !void {
+fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
+    const msg = tz.Msg.from(ctx, update) orelse return;
     if (msg.is("/start")) return onStart(msg);
     if (msg.prefix("/echo ")) return onEcho(msg);
 }
 ```
 
-call any tl function directly through `msg.ctx`. `call` returns a `Response(T)`, `exec` discards the reply:
+call any tl function directly through `ctx`. `call` returns a `Response(T)`, `exec` discards the reply:
 
 ```zig
-const resp = try msg.ctx.call(f.users.GetUsers{ .id = &id_input });
+const resp = try ctx.call(f.users.GetUsers{ .id = &id_input });
 defer resp.deinit();
 
-try msg.ctx.exec(f.messages.SendMessage{ .peer = peer, .message = "hi" });
+try ctx.exec(f.messages.SendMessage{ .peer = peer, .message = "hi" });
 ```
 
 helpers — media, reactions, pins, edits — take `msg` directly:
@@ -95,18 +102,33 @@ const bytes = try h.download(msg.ctx, msg.mediaLocation().?);
 defer msg.ctx.allocator.free(bytes);
 ```
 
-username resolution (cache-first, falls back to RPC):
-
-```zig
-const peer = try msg.ctx.resolveUsername("username");
-```
-
-non-message update types (callbacks, inline queries) still use `fn(Context, T) !void`:
+other update types follow the same pattern — any `UpdateXxx` from the TL schema:
 
 ```zig
 fn onCallback(ctx: tz.Context, update: tg.UpdateBotCallbackQuery) !void {
     try h.answerCallbackQuery(ctx, update, .{ .text = "clicked!" });
 }
+
+fn onInlineQuery(ctx: tz.Context, update: tg.UpdateBotInlineQuery) !void {
+    try h.answerInlineQuery(ctx, update, &results, .{});
+}
+
+fn onEditedMessage(ctx: tz.Context, update: tg.UpdateEditMessage) !void {
+    _ = ctx; _ = update;
+}
+
+const handlers = &.{
+    tz.handler(tg.UpdateNewMessage, onMessage),
+    tz.handler(tg.UpdateBotCallbackQuery, onCallback),
+    tz.handler(tg.UpdateBotInlineQuery, onInlineQuery),
+    tz.handler(tg.UpdateEditMessage, onEditedMessage),
+};
+```
+
+username resolution (cache-first, falls back to RPC):
+
+```zig
+const peer = try msg.ctx.resolveUsername("username");
 ```
 
 ## memory

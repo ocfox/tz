@@ -1,3 +1,7 @@
+//! feature_demo — exercises most of the tz API surface.
+//! Set TZ_OWNER_ID to restrict to your own user id.
+//! usage: TZ_API_ID=<id> TZ_API_HASH=<hash> TZ_BOT_TOKEN=<token> zig build feature-demo
+
 const std = @import("std");
 const tz = @import("tz");
 const tg = tz.types;
@@ -6,77 +10,66 @@ const h = tz.helpers;
 
 var g_environ: std.process.Environ = .empty;
 
-fn isAllowed(msg: tg.Message_) bool {
+fn isAllowed(msg: tz.Msg) bool {
     const env = g_environ.getPosix("TZ_OWNER_ID") orelse return true;
     const owner_id = std.fmt.parseInt(i64, env, 10) catch return true;
-    return switch (msg.peer_id) {
+    return switch (msg.raw.peer_id) {
         .PeerUser => |p| p.user_id == owner_id,
         else => false,
     };
 }
 
-fn replyMsgId(msg: tg.Message_) ?i32 {
-    const rt = msg.reply_to.value orelse return null;
-    return switch (rt) {
-        .MessageReplyHeader => |rh| rh.reply_to_msg_id.value,
-        else => null,
-    };
-}
-
-fn msgPeer(ctx: h.Context, update: tg.UpdateNewMessage) ?struct { msg: tg.Message_, peer: tg.InputPeer } {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return null,
-    };
-    const peer = h.peerFromMessage(ctx.entities, msg) orelse return null;
-    return .{ .msg = msg, .peer = peer };
+fn stickerFilename(doc: tg.Document_) []const u8 {
+    for (doc.attributes) |attr| {
+        switch (attr) {
+            .DocumentAttributeFilename => |a| return a.file_name,
+            else => {},
+        }
+    }
+    if (std.mem.eql(u8, doc.mime_type, "video/webm")) return "sticker.webm";
+    if (std.mem.eql(u8, doc.mime_type, "application/x-tgsticker")) return "sticker.tgs";
+    return "sticker.webp";
 }
 
 // --- command handlers ---
 
-fn onHelp(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    var ft = h.FormattedText.init(ctx.allocator);
+fn onHelp(msg: tz.Msg) !void {
+    var ft = h.FormattedText.init(msg.ctx.allocator);
     defer ft.deinit();
-    try ft.bold("pill");
-    try ft.plain(" — tz feature test\n\n");
-    try ft.code("/echo <text>");
-    try ft.plain(" echo in bold\n");
-    try ft.code("/fmt");
-    try ft.plain(" formatting demo\n");
-    try ft.code("/keyboard");
-    try ft.plain(" inline keyboard\n");
-    try ft.code("/document");
-    try ft.plain(" send a file\n");
-    try ft.code("/info");
-    try ft.plain(" your user info\n");
-    try ft.code("/react");
-    try ft.plain(" add ❤ (reply to msg)\n");
-    try ft.code("/unreact");
-    try ft.plain(" clear reactions (reply to msg)\n");
-    try ft.code("/pin");
-    try ft.plain(" pin a message (reply to msg)\n");
-    try ft.code("/unpin");
-    try ft.plain(" unpin a message (reply to msg)\n");
-    try ft.code("/forward");
-    try ft.plain(" forward to this chat (reply to msg)\n");
-    try ft.plain("\nSend me a photo and I'll download and re-send it.");
-    try h.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });
+    try ft.bold("feature_demo");
+    try ft.plain(" — tz API demo\n\n");
+    const cmds = &[_][2][]const u8{
+        .{ "/echo <text>", "echo in bold" },
+        .{ "/fmt",         "formatting demo" },
+        .{ "/keyboard",    "inline keyboard" },
+        .{ "/document",    "send a file" },
+        .{ "/info",        "your user info" },
+        .{ "/react",       "add ❤ (reply to msg)" },
+        .{ "/unreact",     "clear reactions (reply)" },
+        .{ "/pin",         "pin a message (reply)" },
+        .{ "/unpin",       "unpin a message (reply)" },
+        .{ "/forward",     "forward to this chat (reply)" },
+    };
+    for (cmds) |cmd| {
+        try ft.code(cmd[0]);
+        try ft.plain("  ");
+        try ft.plain(cmd[1]);
+        try ft.plain("\n");
+    }
+    try ft.plain("\nSend me a photo or sticker and I'll re-send it.");
+    try msg.replyFmt(ft.text.items, ft.entities.items);
 }
 
-fn onEcho(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    const arg = msg.message["/echo ".len..];
-    var ft = h.FormattedText.init(ctx.allocator);
+fn onEcho(msg: tz.Msg) !void {
+    const arg = msg.text()["/echo ".len..];
+    var ft = h.FormattedText.init(msg.ctx.allocator);
     defer ft.deinit();
     try ft.bold(arg);
-    try h.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });
+    try msg.replyFmt(ft.text.items, ft.entities.items);
 }
 
-fn onFmt(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    var ft = h.FormattedText.init(ctx.allocator);
+fn onFmt(msg: tz.Msg) !void {
+    var ft = h.FormattedText.init(msg.ctx.allocator);
     defer ft.deinit();
     try ft.bold("bold");
     try ft.plain("  ");
@@ -92,11 +85,11 @@ fn onFmt(ctx: h.Context, update: tg.UpdateNewMessage) !void {
     try ft.plain("\n");
     try ft.pre("pub fn main() !void {}\n", "zig");
     try ft.link("ziglang.org", "https://ziglang.org");
-    try h.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });
+    try msg.replyFmt(ft.text.items, ft.entities.items);
 }
 
-fn onKeyboard(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    const mp = msgPeer(ctx, update) orelse return;
+fn onKeyboard(msg: tz.Msg) !void {
+    const peer = msg.peer() orelse return;
     var row1 = [_]tg.KeyboardButton{
         h.keyboard.callbackButton("Button A", "cb:a"),
         h.keyboard.callbackButton("Button B", "cb:b"),
@@ -108,186 +101,106 @@ fn onKeyboard(ctx: h.Context, update: tg.UpdateNewMessage) !void {
         h.keyboard.inlineRow(&row1),
         h.keyboard.inlineRow(&row2),
     };
-    try ctx.exec(f.messages.SendMessage{
-        .peer = mp.peer,
+    try msg.ctx.exec(f.messages.SendMessage{
+        .peer = peer,
         .message = "Choose:",
         .reply_markup = .some(h.keyboard.inlineKeyboard(&rows)),
     });
 }
 
-fn onDocument(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    const data = "pill bot — test document\ngenerated by tz\n";
-    try h.media.sendDocument(ctx, update, data, "text/plain", .{ .caption = "pill.txt" });
+fn onDocument(msg: tz.Msg) !void {
+    const data = "feature_demo — test document\ngenerated by tz\n";
+    try h.media.sendDocument(msg, data, "text/plain", .{ .caption = "demo.txt" });
 }
 
-fn onInfo(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
-    const sender_id = blk: {
-        if (msg.from_id.value) |from| {
-            if (from == .PeerUser) break :blk from.PeerUser.user_id;
-        }
-        if (msg.peer_id == .PeerUser) break :blk msg.peer_id.PeerUser.user_id;
-        return;
-    };
-    const access_hash = ctx.entities.accessHash(sender_id) orelse return;
-    var id_input = [_]tg.InputUser{.{ .InputUser = .{ .user_id = sender_id, .access_hash = access_hash } }};
-    const users_resp = try ctx.call(f.users.GetUsers{ .id = &id_input });
+fn onInfo(msg: tz.Msg) !void {
+    const sender_id = msg.senderId() orelse return;
+    var id_input = [_]tg.InputUser{msg.ctx.entities.inputUser(sender_id) orelse return};
+    const users_resp = try msg.ctx.call(f.users.GetUsers{ .id = &id_input });
     defer users_resp.deinit();
-    const users = users_resp.value;
-
-    if (users.len == 0) {
-        try h.reply(ctx, update, "no result", .{});
-        return;
-    }
-    const user = switch (users[0]) {
+    if (users_resp.value.len == 0) return msg.reply("no result");
+    const user = switch (users_resp.value[0]) {
         .User => |u| u,
-        else => {
-            try h.reply(ctx, update, "unexpected user type", .{});
-            return;
-        },
+        else => return msg.reply("unexpected user type"),
     };
-
-    var ft = h.FormattedText.init(ctx.allocator);
+    var ft = h.FormattedText.init(msg.ctx.allocator);
     defer ft.deinit();
-    try ft.bold("User info\n");
-
-    const id_str = try std.fmt.allocPrint(ctx.allocator, "id: {d}\n", .{user.id});
-    defer ctx.allocator.free(id_str);
+    try ft.bold("user info\n");
+    const id_str = try std.fmt.allocPrint(msg.ctx.allocator, "id: {d}\n", .{user.id});
+    defer msg.ctx.allocator.free(id_str);
     try ft.plain(id_str);
-
-    if (user.first_name.value) |name| {
-        try ft.plain("first: ");
-        try ft.plain(name);
-        try ft.plain("\n");
-    }
-    if (user.last_name.value) |name| {
-        try ft.plain("last: ");
-        try ft.plain(name);
-        try ft.plain("\n");
-    }
-    if (user.username.value) |name| {
-        try ft.plain("username: @");
-        try ft.plain(name);
-        try ft.plain("\n");
-    }
+    if (user.first_name.value) |n| { try ft.plain("first: "); try ft.plain(n); try ft.plain("\n"); }
+    if (user.last_name.value)  |n| { try ft.plain("last: ");  try ft.plain(n); try ft.plain("\n"); }
+    if (user.username.value)   |n| { try ft.plain("username: @"); try ft.plain(n); try ft.plain("\n"); }
     if (user.bot.value != null) try ft.italic("(bot account)");
-
-    try h.reply(ctx, update, ft.text.items, .{ .entities = ft.entities.items });
+    try msg.replyFmt(ft.text.items, ft.entities.items);
 }
 
-fn onReact(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    const mp = msgPeer(ctx, update) orelse return;
-    const target_id = replyMsgId(mp.msg) orelse mp.msg.id;
-    try h.addReaction(ctx, mp.peer, target_id, "❤");
+fn onReact(msg: tz.Msg) !void {
+    try h.addReaction(msg.ctx, msg.peer() orelse return, msg.replyToId() orelse msg.id(), "❤");
 }
 
-fn onUnreact(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    const mp = msgPeer(ctx, update) orelse return;
-    const target_id = replyMsgId(mp.msg) orelse mp.msg.id;
-    try h.removeReaction(ctx, mp.peer, target_id);
+fn onUnreact(msg: tz.Msg) !void {
+    try h.removeReaction(msg.ctx, msg.peer() orelse return, msg.replyToId() orelse msg.id());
 }
 
-fn onPin(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    const mp = msgPeer(ctx, update) orelse return;
-    const target_id = replyMsgId(mp.msg) orelse {
-        try h.reply(ctx, update, "Reply to a message to pin it.", .{});
-        return;
-    };
-    try h.pinMessage(ctx, mp.peer, target_id, .{});
+fn onPin(msg: tz.Msg) !void {
+    const target_id = msg.replyToId() orelse return msg.respond("reply to a message to pin it");
+    try h.pinMessage(msg.ctx, msg.peer() orelse return, target_id, .{});
 }
 
-fn onUnpin(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    const mp = msgPeer(ctx, update) orelse return;
-    const target_id = replyMsgId(mp.msg) orelse {
-        try h.reply(ctx, update, "Reply to a message to unpin it.", .{});
-        return;
-    };
-    try h.pinMessage(ctx, mp.peer, target_id, .{ .unpin = true });
+fn onUnpin(msg: tz.Msg) !void {
+    const target_id = msg.replyToId() orelse return msg.respond("reply to a message to unpin it");
+    try h.pinMessage(msg.ctx, msg.peer() orelse return, target_id, .{ .unpin = true });
 }
 
-fn onForward(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    const mp = msgPeer(ctx, update) orelse return;
-    const target_id = replyMsgId(mp.msg) orelse {
-        try h.reply(ctx, update, "Reply to a message to forward it.", .{});
-        return;
-    };
-    var fwd_ids = [_]i32{target_id};
-    try h.forwardMessages(ctx, mp.peer, mp.peer, &fwd_ids);
+fn onForward(msg: tz.Msg) !void {
+    const target_id = msg.replyToId() orelse return msg.respond("reply to a message to forward it");
+    const peer = msg.peer() orelse return;
+    var ids = [_]i32{target_id};
+    try h.forwardMessages(msg.ctx, peer, peer, &ids);
 }
 
-fn stickerFilename(doc: tg.Document_) []const u8 {
-    for (doc.attributes) |attr| {
-        switch (attr) {
-            .DocumentAttributeFilename => |a| return a.file_name,
-            else => {},
-        }
-    }
-    if (std.mem.eql(u8, doc.mime_type, "video/webm")) return "sticker.webm";
-    if (std.mem.eql(u8, doc.mime_type, "application/x-tgsticker")) return "sticker.tgs";
-    return "sticker.webp";
-}
-
-// --- update handlers ---
-
-const R = h.Cmd(tg.UpdateNewMessage);
-
-fn onMessage(ctx: h.Context, update: tg.UpdateNewMessage) !void {
-    const msg = switch (update.message) {
-        .Message => |m| m,
-        else => return,
-    };
+fn onMessage(ctx: tz.Context, update: tg.UpdateNewMessage) !void {
+    const msg = tz.Msg.from(ctx, update) orelse return;
     if (!isAllowed(msg)) return;
 
-    if (try h.route(ctx, update, msg.message, &.{
-        R.exact("/start", onHelp),
-        R.exact("/help", onHelp),
-        R.prefix("/echo ", onEcho),
-        R.exact("/fmt", onFmt),
-        R.exact("/keyboard", onKeyboard),
-        R.exact("/document", onDocument),
-        R.exact("/info", onInfo),
-        R.exact("/react", onReact),
-        R.exact("/unreact", onUnreact),
-        R.exact("/pin", onPin),
-        R.exact("/unpin", onUnpin),
-        R.exact("/forward", onForward),
-    })) return;
+    if (msg.is("/start") or msg.is("/help")) return onHelp(msg);
+    if (msg.prefix("/echo "))  return onEcho(msg);
+    if (msg.is("/fmt"))        return onFmt(msg);
+    if (msg.is("/keyboard"))   return onKeyboard(msg);
+    if (msg.is("/document"))   return onDocument(msg);
+    if (msg.is("/info"))       return onInfo(msg);
+    if (msg.is("/react"))      return onReact(msg);
+    if (msg.is("/unreact"))    return onUnreact(msg);
+    if (msg.is("/pin"))        return onPin(msg);
+    if (msg.is("/unpin"))      return onUnpin(msg);
+    if (msg.is("/forward"))    return onForward(msg);
 
-    const media = msg.media.value orelse return;
-    switch (media) {
-        .MessageMediaPhoto => |mp| {
-            const photo = switch (mp.photo.value orelse return) {
-                .Photo => |p| p,
-                else => return,
-            };
-            const location = h.photoLocation(.{ .Photo = photo }) orelse return;
-            const bytes = try h.download(ctx, location);
-            defer ctx.allocator.free(bytes);
-            try h.media.sendDocument(ctx, update, bytes, "image/jpeg", .{ .caption = "re-sent photo" });
+    switch (msg.raw.media.value orelse return) {
+        .MessageMediaPhoto => {
+            const bytes = try h.download(msg.ctx, msg.mediaLocation() orelse return);
+            defer msg.ctx.allocator.free(bytes);
+            try h.media.sendDocument(msg, bytes, "image/jpeg", .{ .caption = "re-sent photo" });
         },
         .MessageMediaDocument => |md| {
-            const doc_union = md.document.value orelse return;
-            const doc = switch (doc_union) {
+            const doc = switch (md.document.value orelse return) {
                 .Document => |d| d,
                 else => return,
             };
-            const is_sticker = for (doc.attributes) |attr| {
-                if (attr == .DocumentAttributeSticker) break true;
+            const is_sticker = for (doc.attributes) |a| {
+                if (a == .DocumentAttributeSticker) break true;
             } else false;
             if (!is_sticker) return;
-            const location = h.documentLocation(doc_union) orelse return;
-            const bytes = try h.download(ctx, location);
-            defer ctx.allocator.free(bytes);
-            try h.media.sendDocument(ctx, update, bytes, doc.mime_type, .{ .caption = stickerFilename(doc) });
+            const bytes = try h.download(msg.ctx, msg.mediaLocation() orelse return);
+            defer msg.ctx.allocator.free(bytes);
+            try h.media.sendDocument(msg, bytes, doc.mime_type, .{ .caption = stickerFilename(doc) });
         },
         else => {},
     }
 }
 
-fn onCallback(ctx: h.Context, update: tg.UpdateBotCallbackQuery) !void {
+fn onCallback(ctx: tz.Context, update: tg.UpdateBotCallbackQuery) !void {
     const data = update.data.value orelse return;
     if (std.mem.eql(u8, data, "cb:a")) {
         try h.answerCallbackQuery(ctx, update, .{ .text = "You pressed A!" });
@@ -314,7 +227,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer threaded.deinit();
     const io = threaded.io();
 
-    var file_storage = tz.Storage.File.init("pill.session");
+    var file_storage = tz.Storage.File.init("feature_demo.session");
 
     const client = try tz.Client(handlers).init(allocator, .{
         .api_id = try std.fmt.parseInt(i32, init.environ.getPosix("TZ_API_ID") orelse usage(), 10),

@@ -2,10 +2,8 @@ const Msg = @This();
 const std = @import("std");
 const types = @import("types");
 const functions = @import("functions");
-const client = @import("client.zig");
+const Context = @import("Context.zig");
 const File = @import("File.zig");
-
-const Context = client.Context;
 
 /// The concrete message struct (types.Message_ — not the Message union).
 pub const Raw = types.Message_;
