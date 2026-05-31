@@ -84,7 +84,7 @@ pub const Context = struct {
     api_id: i32,
     api_hash: []const u8,
     entities: Entities,
-    peer_cache: *const @import("State.zig").PeerCache,
+    peer_cache: *@import("State.zig").PeerCache,
     mb_mutex: *std.Io.Mutex,
     callFn: *const fn (client: *anyopaque, io: Io, bytes: []const u8) anyerror![]u8,
     /// Like callFn but routes FILE_MIGRATE to a sub-connection automatically.
@@ -140,6 +140,36 @@ pub const Context = struct {
         self.mb_mutex.lockUncancelable(self.io);
         defer self.mb_mutex.unlock(self.io);
         return self.peer_cache.inputChannel(id);
+    }
+
+    /// Resolve a username to an InputPeer.  Checks the cache first; falls back
+    /// to contacts.resolveUsername and populates the cache from the response.
+    /// `username` may include a leading `@`; lookup is case-insensitive.
+    pub fn resolveUsername(self: Context, username: []const u8) !types.InputPeer {
+        const raw = std.mem.trimLeft(u8, username, "@");
+        if (raw.len == 0 or raw.len > 64) return error.InvalidUsername;
+        var buf: [64]u8 = undefined;
+        const name = std.ascii.lowerString(buf[0..raw.len], raw);
+
+        {
+            self.mb_mutex.lockUncancelable(self.io);
+            defer self.mb_mutex.unlock(self.io);
+            if (self.peer_cache.lookupUsername(name)) |id|
+                if (self.peer_cache.inputPeer(id)) |ip| return ip;
+        }
+
+        const r = try self.call(functions.contacts.ResolveUsername{ .username = name });
+        defer r.deinit();
+
+        self.mb_mutex.lockUncancelable(self.io);
+        defer self.mb_mutex.unlock(self.io);
+        try self.peer_cache.update(self.allocator, r.value.users, r.value.chats);
+        const id: i64 = switch (r.value.peer) {
+            .PeerUser => |p| p.user_id,
+            .PeerChannel => |p| p.channel_id,
+            .PeerChat => |p| p.chat_id,
+        };
+        return self.peer_cache.inputPeer(id) orelse error.PeerNotFound;
     }
 };
 

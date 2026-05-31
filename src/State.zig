@@ -892,9 +892,14 @@ pub const PeerCache = struct {
     };
 
     map: std.AutoHashMapUnmanaged(i64, CacheEntry) = .empty,
+    /// username (lowercase, no @) → id.  Keys are gpa-owned.
+    username_map: std.StringHashMapUnmanaged(i64) = .empty,
 
     pub fn deinit(self: *PeerCache, gpa: std.mem.Allocator) void {
         self.map.deinit(gpa);
+        var it = self.username_map.keyIterator();
+        while (it.next()) |k| gpa.free(k.*);
+        self.username_map.deinit(gpa);
     }
 
     fn put(self: *PeerCache, gpa: std.mem.Allocator, id: i64, e: CacheEntry) !void {
@@ -906,6 +911,24 @@ pub const PeerCache = struct {
         gop.value_ptr.* = e;
     }
 
+    /// Store a username → id mapping.  `username` is normalized to lowercase
+    /// before insertion; no leading `@`.  Silently ignores names longer than 64 bytes.
+    pub fn putUsername(self: *PeerCache, gpa: std.mem.Allocator, username: []const u8, id: i64) !void {
+        if (username.len == 0 or username.len > 64) return;
+        var buf: [64]u8 = undefined;
+        const lower = std.ascii.lowerString(buf[0..username.len], username);
+        const gop = try self.username_map.getOrPut(gpa, lower);
+        if (!gop.found_existing) gop.key_ptr.* = try gpa.dupe(u8, lower);
+        gop.value_ptr.* = id;
+    }
+
+    pub fn lookupUsername(self: *const PeerCache, username: []const u8) ?i64 {
+        if (username.len == 0 or username.len > 64) return null;
+        var buf: [64]u8 = undefined;
+        const lower = std.ascii.lowerString(buf[0..username.len], username);
+        return self.username_map.get(lower);
+    }
+
     pub fn update(
         self: *PeerCache,
         gpa: std.mem.Allocator,
@@ -913,13 +936,27 @@ pub const PeerCache = struct {
         chats: []const types.Chat,
     ) !void {
         for (users) |u| switch (u) {
-            .User => |user| if (user.access_hash.value) |ah|
-                try self.put(gpa, user.id, .{ .access_hash = ah, .kind = .user, .min = user.min.value != null }),
+            .User => |user| {
+                if (user.access_hash.value) |ah|
+                    try self.put(gpa, user.id, .{ .access_hash = ah, .kind = .user, .min = user.min.value != null });
+                if (user.username.value) |name|
+                    try self.putUsername(gpa, name, user.id);
+                if (user.usernames.value) |names|
+                    for (names) |un| if (un.active.value != null)
+                        try self.putUsername(gpa, un.username, user.id);
+            },
             else => {},
         };
         for (chats) |c| switch (c) {
-            .Channel => |ch| if (ch.access_hash.value) |ah|
-                try self.put(gpa, ch.id, .{ .access_hash = ah, .kind = .channel, .min = ch.min.value != null }),
+            .Channel => |ch| {
+                if (ch.access_hash.value) |ah|
+                    try self.put(gpa, ch.id, .{ .access_hash = ah, .kind = .channel, .min = ch.min.value != null });
+                if (ch.username.value) |name|
+                    try self.putUsername(gpa, name, ch.id);
+                if (ch.usernames.value) |names|
+                    for (names) |un| if (un.active.value != null)
+                        try self.putUsername(gpa, un.username, ch.id);
+            },
             .Chat => |chat| try self.put(gpa, chat.id, .{ .access_hash = 0, .kind = .chat, .min = false }),
             else => {},
         };
